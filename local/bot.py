@@ -1484,25 +1484,69 @@ async def cmd_admin(message: Message) -> None:
 
 
 async def render_admin(bot: Bot, chat_id: int) -> None:
-    """Render the admin panel."""
+    """Admin panel — clean top level with three grouped sections."""
+    b = InlineKeyboardBuilder()
+    b.button(text="📊 Аналітика", callback_data="a_an")
+    b.button(text="🅿️ База і парсер", callback_data="a_db")
+    b.button(text="⚙️ Керування", callback_data="a_mng")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    b.adjust(1)
+    role = "супер-адмін" if _is_super(chat_id) else "адмін"
+    pending = (await db.get_meta("stage_pending")) == "1"
+    note = "\n\n📥 <b>Є оновлення у черзі</b> → База і парсер → Оновити базу" if pending else ""
+    await show(bot, chat_id, f"🛠 <b>Адмін-панель</b> ({role}){note}\n\nОбери розділ 👇", b.as_markup())
+
+
+@dp.callback_query(F.data == "a_an")
+async def cb_a_an(cq: CallbackQuery) -> None:
+    """Admin section: analytics."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
     b = InlineKeyboardBuilder()
     b.button(text="📊 Статистика", callback_data="a_stats")
     b.button(text="👥 Користувачі", callback_data="a_users")
     b.button(text="🔎 Активність", callback_data="a_activity")
-    b.button(text="🕷 Запустити парсер", callback_data="a_scan")
+    b.button(text="🐞 Звіти про помилки", callback_data="a_reports")
+    b.button(text="⬅️ Адмінка", callback_data="admin")
+    b.adjust(2, 2, 1)
+    await show(cq.message.bot, cq.message.chat.id, "📊 <b>Аналітика</b>", b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_db")
+async def cb_a_db(cq: CallbackQuery) -> None:
+    """Admin section: database & parser."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    pending = (await db.get_meta("stage_pending")) == "1"
+    cnt = await db.get_meta("stage_count") or "0"
+    b = InlineKeyboardBuilder()
+    b.button(text="🅿️ Парсер (регіон/тип, звіт ТСЦ)", callback_data="a_scan")
+    b.button(text=(f"🔄 Оновити базу ({cnt})" if pending else "🔄 Оновити базу"), callback_data="a_commit")
+    b.button(text="📥 Імпорт CSV", callback_data="a_import")
+    b.button(text="⬅️ Адмінка", callback_data="admin")
+    b.adjust(1, 2, 1)
+    note = f"\n\n📥 У черзі очікує <b>{cnt}</b> номерів." if pending else ""
+    await show(cq.message.bot, cq.message.chat.id, f"🅿️ <b>База і парсер</b>{note}", b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_mng")
+async def cb_a_mng(cq: CallbackQuery) -> None:
+    """Admin section: management."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    b = InlineKeyboardBuilder()
     b.button(text="💎 Надати VIP", callback_data="a_vip")
     b.button(text="🤖 Боти", callback_data="a_bots")
     b.button(text="📣 Розсилка", callback_data="a_bcast")
     b.button(text="📢 Оживити чати", callback_data="a_refresh")
-    b.button(text="📥 Імпорт CSV", callback_data="a_import")
-    b.button(text="🔄 Оновити базу", callback_data="a_commit")
-    b.button(text="🐞 Звіти про помилки", callback_data="a_reports")
-    if _is_super(chat_id):
+    if _is_super(cq.message.chat.id):
         b.button(text="👮 Адміни", callback_data="a_admins")
-    b.button(text="⬅️ Меню", callback_data="menu")
-    b.adjust(2, 2, 2, 2, 2, 2, 1)
-    role = "супер-адмін" if _is_super(chat_id) else "адмін"
-    await show(bot, chat_id, f"🛠 <b>Адмін-панель</b> ({role})", b.as_markup())
+    b.button(text="⬅️ Адмінка", callback_data="admin")
+    b.adjust(2, 2, 1, 1)
+    await show(cq.message.bot, cq.message.chat.id, "⚙️ <b>Керування</b>", b.as_markup())
+    await cq.answer()
 
 
 @dp.callback_query(F.data == "admin")
