@@ -11,6 +11,16 @@ Self-contained (no `local` package): safe to bundle into a single Windows .exe v
 """
 from __future__ import annotations
 
+import os
+
+# Pin Playwright's browser dir to a fixed, writable user path so that the browser DOWNLOAD
+# (ensure_browser) and the browser LAUNCH use the SAME location. Without this, a PyInstaller
+# one-file build downloads Chromium to %LOCALAPPDATA%\ms-playwright but tries to launch it from
+# the read-only bundle temp dir → "Executable doesn't exist". Must be set BEFORE importing playwright.
+os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "ms-playwright"
+)
+
 import asyncio
 import json
 import random
