@@ -123,11 +123,9 @@ async def scrape(type_filter: Callable[[str], bool]) -> Dict[str, Any]:
     fail_scopes: List[Tuple[str, str]] = []
     async with async_playwright() as pw:
         browser = await pw.chromium.launch(
-            headless=False,  # headed passes Akamai; window pushed off-screen below
-            args=[
-                "--disable-blink-features=AutomationControlled", "--no-sandbox",
-                "--window-position=-2400,-2400", "--window-size=1366,768",
-            ],
+            headless=False,  # headed passes Akamai (visible window, like the proven Mac setup)
+            args=["--disable-blink-features=AutomationControlled", "--no-sandbox",
+                  "--start-maximized"],
         )
         ctx = await browser.new_context(
             locale="uk-UA", timezone_id="Europe/Kyiv", user_agent=USER_AGENT,
