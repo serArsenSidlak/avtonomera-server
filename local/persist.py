@@ -1,0 +1,100 @@
+"""Shared scan-persistence logic — used by the local scan AND the server /ingest endpoint.
+
+Takes scraped rows + the set of successfully-scanned (region, type) scopes, applies them to
+the DB (upsert, scope-safe mark_removed, reconcile, feed events) and notifies matching hunts.
+"""
+from __future__ import annotations
+
+from collections import defaultdict
+from typing import Any, Dict, List, Tuple
+
+from local import config, db
+from local.matcher import matches
+
+
+def _fmt_plate_msg(plate: Dict[str, Any], hunt_name: str) -> str:
+    """Format a 'found' notification message."""
+    price = plate.get("price")
+    price_str = f"{int(price):,} грн".replace(",", " ") if price else "—"
+    return (
+        "🎯 ЗНАЙДЕНО НОМЕР!\n\n"
+        f"🚗 {plate['plate_number']}\n"
+        f"📍 {plate['region']} › {plate.get('tsc') or '—'}\n"
+        f"🏷 Тип: {plate.get('vehicle_type') or 'будь-який'}\n"
+        f"💰 Ціна: {price_str}\n"
+        f"🔍 Твоя охота: {hunt_name or '—'}"
+    )
+
+
+async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
+    """Persist scraped rows; mark removed only within successfully-scanned scopes.
+
+    Returns a summary dict including the list of new plate ids (for notifications).
+    """
+    await db.init_db()
+    seeded = (await db.get_meta("seeded")) == "1"
+    new_ids: List[int] = []
+    seen_by_scope: Dict[Tuple[str, Any], List[int]] = defaultdict(list)
+    removed = 0
+
+    async with db.acquire() as conn:
+        seen_tsc: set = set()
+        for r in rows:
+            pid, is_new = await db.upsert_plate(
+                conn, r["plate_number"], r["region"], r.get("tsc"), r.get("vehicle_type"), r.get("price")
+            )
+            seen_by_scope[(r["region"], r.get("vehicle_type"))].append(pid)
+            if r.get("tsc") and r["tsc"] not in seen_tsc:
+                await db.upsert_tsc_region(conn, r["tsc"], r["region"])
+                seen_tsc.add(r["tsc"])
+            if is_new:
+                new_ids.append(pid)
+                if seeded:
+                    await db.log_feed_event(conn, r["plate_number"], r["region"], r.get("vehicle_type"), "new")
+        for (region, vtype) in ok_scopes:
+            ids = seen_by_scope.get((region, vtype), [])
+            removed_rows = await db.mark_removed(conn, region, vtype, ids)
+            removed += len(removed_rows)
+            for rr in removed_rows:
+                await db.log_feed_event(conn, rr["plate_number"], rr["region"], rr.get("vehicle_type"), "removed")
+        await db.reconcile_removed(conn)
+
+    if not seeded:
+        await db.set_meta("seeded", "1")
+    import datetime as dt
+    await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    return {"scraped": len(rows), "new_ids": new_ids, "removed": removed}
+
+
+async def notify_new(new_ids: List[int]) -> int:
+    """Match new plates against active hunts and send Telegram notifications."""
+    if not config.BOT_TOKEN or not new_ids:
+        return 0
+    from aiogram import Bot
+
+    bot = Bot(token=config.BOT_TOKEN)
+    sent = 0
+    try:
+        async with db.acquire() as conn:
+            hunts = await db.active_hunts(conn)
+            if not hunts:
+                return 0
+            for pid in new_ids:
+                plate = await db.get_plate(conn, pid)
+                if not plate:
+                    continue
+                for hunt in hunts:
+                    if not matches(plate, hunt):
+                        continue
+                    if await db.already_notified(conn, hunt["id"], pid):
+                        continue
+                    try:
+                        msg = await bot.send_message(hunt["chat_id"], _fmt_plate_msg(plate, hunt.get("name")))
+                        await db.add_notif_message(hunt["chat_id"], msg.message_id)
+                        await db.record_notified(conn, hunt["id"], pid)
+                        sent += 1
+                    except Exception as exc:  # noqa: BLE001
+                        print(f"[notify] send failed: {exc!r}")
+    finally:
+        await bot.session.close()
+    return sent

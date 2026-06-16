@@ -1,0 +1,5 @@
+aiogram>=3.22
+fastapi
+uvicorn[standard]
+asyncpg
+aiosqlite

@@ -1,0 +1,59 @@
+"""Local MVP settings — read from environment or local/.env (Python 3.9, no deps)."""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parent
+
+
+def _load_env() -> None:
+    """Load KEY=VALUE pairs from local/.env into os.environ (without overriding)."""
+    env_path = _ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_env()
+
+# Product bot token (SEPARATE from the dev-comms bot). Required to run the bot.
+BOT_TOKEN: str = os.environ.get("LOCAL_BOT_TOKEN", "")
+# Owner chat id for admin notifications (optional).
+ADMIN_CHAT_ID: int = int(os.environ.get("LOCAL_ADMIN_CHAT_ID", "0") or "0")
+# SQLite database file.
+DB_PATH: str = os.environ.get("LOCAL_DB_PATH", str(_ROOT / "hsc_local.db"))
+
+PAGE_URL: str = "https://opendata.hsc.gov.ua/check-leisure-license-plates/"
+USER_AGENT: str = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+HEADLESS: bool = os.environ.get("LOCAL_HEADLESS", "false").lower() == "true"
+SCAN_INTERVAL_MINUTES: int = int(os.environ.get("LOCAL_SCAN_INTERVAL_MINUTES", "180"))
+# Comma-separated region values to scrape; empty = all. Default Vinnytsia ("2") for quick tests.
+SCAN_REGIONS: str = os.environ.get("LOCAL_SCAN_REGIONS", "2")
+
+# Server architecture: Mac scraper pushes results to the server's /ingest with this secret.
+INGEST_SECRET: str = os.environ.get("LOCAL_INGEST_SECRET", "")
+# Where the Mac scraper pushes scraped data (the server's public API base).
+SERVER_INGEST_URL: str = os.environ.get("LOCAL_SERVER_INGEST_URL", "")
+
+# API protection: only clients sending this key may read data (blocks third-party scrapers).
+API_KEY: str = os.environ.get("LOCAL_API_KEY", "")
+# Per-IP rate limit for the API (requests per minute).
+API_RATE_PER_MIN: int = int(os.environ.get("LOCAL_API_RATE_PER_MIN", "120"))
+
+# Database backend: "sqlite" (local MVP) or "postgres" (Supabase). Switch after migration.
+DB_BACKEND: str = os.environ.get("LOCAL_DB_BACKEND", "sqlite")
+# Postgres / Supabase connection (used when DB_BACKEND == "postgres").
+PG_HOST: str = os.environ.get("LOCAL_PG_HOST", "")
+PG_PORT: int = int(os.environ.get("LOCAL_PG_PORT", "5432"))
+PG_DB: str = os.environ.get("LOCAL_PG_DB", "postgres")
+PG_USER: str = os.environ.get("LOCAL_PG_USER", "")
+PG_PASSWORD: str = os.environ.get("LOCAL_PG_PASSWORD", "")
