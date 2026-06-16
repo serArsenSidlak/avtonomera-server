@@ -1,16 +1,8 @@
 function refresh() {
-  chrome.storage.local.get({ entries: [] }, function (d) {
-    document.getElementById("count").textContent = d.entries.length;
-  });
+  chrome.storage.local.get({ status: "—" }, (d) => { document.getElementById("status").textContent = d.status; });
 }
-document.getElementById("dl").onclick = function () {
-  chrome.storage.local.get({ entries: [] }, function (d) {
-    const blob = new Blob([JSON.stringify(d.entries, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    chrome.downloads.download({ url: url, filename: "avto-capture.json", saveAs: true });
-  });
+document.getElementById("go").onclick = function () {
+  document.getElementById("status").textContent = "Запускаю збір…";
+  chrome.runtime.sendMessage({ type: "harvest" });
 };
-document.getElementById("clr").onclick = function () {
-  chrome.storage.local.set({ entries: [] }, refresh);
-};
-refresh();
+setInterval(refresh, 1000); refresh();

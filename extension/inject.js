@@ -1,39 +1,28 @@
-// Runs in the PAGE (MAIN) context: patches fetch + XMLHttpRequest to capture responses,
-// then forwards them to the content script via window.postMessage.
+// MAIN world: capture the Authorization header the app uses (so we can reuse the session).
 (function () {
-  function send(entry) {
-    try { window.postMessage({ __avtoCapture: true, entry: entry }, "*"); } catch (e) {}
+  function send(entry) { try { window.postMessage({ __avtoAuth: true, entry: entry }, "*"); } catch (e) {} }
+  function authOf(h) {
+    try {
+      if (!h) return null;
+      if (h.get) return h.get("authorization") || h.get("Authorization");
+      if (typeof h === "object") for (const k in h) if (k.toLowerCase() === "authorization") return h[k];
+    } catch (e) {}
+    return null;
   }
-  const origFetch = window.fetch;
-  if (origFetch) {
-    window.fetch = async function (...args) {
-      const res = await origFetch.apply(this, args);
+  const oFetch = window.fetch;
+  if (oFetch) {
+    window.fetch = function (...args) {
       try {
-        let url = args[0]; if (url && url.url) url = url.url;
-        const method = (args[1] && args[1].method) || (args[0] && args[0].method) || "GET";
-        const reqBody = (args[1] && typeof args[1].body === "string") ? args[1].body : null;
-        res.clone().text().then(function (body) {
-          send({ kind: "fetch", url: String(url), method: method, status: res.status,
-                 reqBody: reqBody, body: body });
-        }).catch(function () {});
+        const init = args[1] || {};
+        const a = authOf(init.headers) || (args[0] && args[0].headers ? authOf(args[0].headers) : null);
+        if (a) send({ auth: a });
       } catch (e) {}
-      return res;
+      return oFetch.apply(this, args);
     };
   }
-  const oOpen = XMLHttpRequest.prototype.open;
-  const oSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (m, u) {
-    this.__avto = { method: m, url: u }; return oOpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function (b) {
-    const xhr = this;
-    xhr.addEventListener("load", function () {
-      try {
-        send({ kind: "xhr", url: (xhr.__avto && xhr.__avto.url) || "", 
-               method: (xhr.__avto && xhr.__avto.method) || "GET", status: xhr.status,
-               reqBody: (typeof b === "string") ? b : null, body: xhr.responseText });
-      } catch (e) {}
-    });
-    return oSend.apply(this, arguments);
+  const oSet = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
+    try { if (k && k.toLowerCase() === "authorization") send({ auth: v }); } catch (e) {}
+    return oSet.apply(this, arguments);
   };
 })();

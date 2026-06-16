@@ -1,7 +1,6 @@
-// Isolated content script: relay captured entries (from the MAIN-world inject.js) to background.
+// Relay the captured Authorization token to the background (stored for the harvest).
 window.addEventListener("message", function (e) {
-  if (e.source !== window || !e.data || !e.data.__avtoCapture) return;
-  const en = e.data.entry || {};
-  if (en.body && en.body.length > 800000) en.body = en.body.slice(0, 800000);
-  try { chrome.runtime.sendMessage({ type: "capture", entry: en }); } catch (x) {}
+  if (e.source !== window || !e.data || !e.data.__avtoAuth) return;
+  const a = e.data.entry && e.data.entry.auth;
+  if (a) { try { chrome.storage.local.set({ authToken: a }); } catch (x) {} }
 });

@@ -1,15 +1,13 @@
 <!doctype html><html lang="uk"><head><meta charset="utf-8">
 <style>
-body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:300px;padding:14px;background:#0f1115;color:#eef1f6}
-h3{margin:0 0 8px}b{color:#7dd3fc}
-button{display:block;width:100%;margin:8px 0;padding:11px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer}
-.dl{background:#3b82f6;color:#fff}.clr{background:#374151;color:#fff}
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:320px;padding:14px;background:#0f1115;color:#eef1f6}
+h3{margin:0 0 6px}button{display:block;width:100%;margin:8px 0;padding:12px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;background:#3b82f6;color:#fff}
+#status{margin-top:10px;padding:10px;background:#1b1f27;border-radius:8px;font-size:13px;white-space:pre-wrap;min-height:34px}
 small{color:#9aa4b2}
 </style></head><body>
-<h3>🚗 Автономера — перехоплювач</h3>
-<p>Перехоплено запитів: <b id="count">0</b></p>
-<button class="dl" id="dl">⬇️ Завантажити JSON</button>
-<button class="clr" id="clr">🗑 Очистити</button>
-<small>Зайди на робочий сайт ГСЦ (кабінет водія), виконай пошук номерів — потім натисни «Завантажити JSON» і надішли файл.</small>
+<h3>🚗 Автономера — збирач</h3>
+<small>1) Залогінься на e-driver.mvs.gov.ua → відкрий «Бронювання НЗ». 2) Натисни кнопку.</small>
+<button id="go">🔄 Зібрати базу і надіслати на сервер</button>
+<div id="status">—</div>
 <script src="popup.js"></script>
 </body></html>
