@@ -1,25 +1,26 @@
 {
   "manifest_version": 3,
   "name": "Автономера — перехоплювач трафіку ГСЦ",
-  "version": "1.0",
-  "description": "Перехоплює запити/відповіді сайтів ГСЦ МВС (fetch/XHR) для проєкту Автономера.",
+  "version": "1.1",
+  "description": "Перехоплює запити/відповіді сайтів *.gov.ua (fetch/XHR) для проєкту Автономера.",
   "permissions": ["storage", "unlimitedStorage", "downloads"],
-  "host_permissions": [
-    "*://*.hsc.gov.ua/*",
-    "*://hsc.gov.ua/*",
-    "*://*.gov.ua/*"
-  ],
+  "host_permissions": ["*://*.gov.ua/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": ["*://*.hsc.gov.ua/*", "*://hsc.gov.ua/*", "*://*.gov.ua/*"],
+      "matches": ["*://*.gov.ua/*"],
+      "js": ["inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.gov.ua/*"],
       "js": ["content.js"],
       "run_at": "document_start",
+      "world": "ISOLATED",
       "all_frames": true
     }
-  ],
-  "web_accessible_resources": [
-    { "resources": ["inject.js"], "matches": ["*://*.gov.ua/*"] }
   ],
   "action": { "default_popup": "popup.html", "default_title": "Автономера — перехоплювач" }
 }
