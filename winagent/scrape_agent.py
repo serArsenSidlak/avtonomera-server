@@ -155,43 +155,53 @@ async def scrape(type_filter: Callable[[str], bool]) -> Dict[str, Any]:
             log(f"regions={len(regions)} types={[l for _, l in types]}")
             for rv, rn in regions:
                 for tv, tl in types:
-                    try:
-                        await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
+                    for attempt in range(3):  # retry intermittent Akamai blocks / slow navs
                         try:
-                            await page.wait_for_selector("#region", timeout=15000)
-                        except Exception:
-                            for _ in range(6):
-                                await _human(page, 4)
-                                if await page.evaluate("()=>document.querySelectorAll('select').length") > 0:
-                                    break
-                                await asyncio.sleep(3)
-                        await page.select_option("#region", rv)
-                        await asyncio.sleep(random.uniform(0.4, 1.0))
-                        for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
-                            loc = page.locator(sel).first
-                            if await loc.count() > 0:
-                                try:
-                                    await loc.click(timeout=2500)
-                                    break
-                                except Exception:
-                                    pass
-                        await page.select_option("#tsc", "Весь регіон")
-                        await page.select_option("#type_venichle", tv)
-                        await asyncio.sleep(random.uniform(0.4, 1.0))
-                        async with page.expect_response(
-                            lambda r: r.request.method == "POST" and "check-leisure-license-plates" in r.url,
-                            timeout=45000,
-                        ) as ri:
-                            await page.locator("input[type=submit]").last.click(timeout=10000)
-                        body = await (await ri.value).text()
-                        if "Номерний" not in body:
-                            raise RuntimeError("no results table (likely blocked)")
-                        out.extend(_parse_table(body, rn, tl))
-                        ok_scopes.add((rn, tl))
-                        await asyncio.sleep(random.uniform(0.5, 1.2))
-                    except Exception as exc:  # noqa: BLE001
-                        fail_scopes.append((rn, tl))
-                        log(f"{rn}/{tl} FAILED: {exc!r}")
+                            await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
+                            try:
+                                await page.wait_for_selector("#region", timeout=15000)
+                            except Exception:
+                                for _ in range(6):
+                                    await _human(page, 4)
+                                    if await page.evaluate("()=>document.querySelectorAll('select').length") > 0:
+                                        break
+                                    await asyncio.sleep(3)
+                            await page.select_option("#region", rv)
+                            await asyncio.sleep(random.uniform(0.5, 1.2))
+                            for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
+                                loc = page.locator(sel).first
+                                if await loc.count() > 0:
+                                    try:
+                                        await loc.click(timeout=2500)
+                                        break
+                                    except Exception:
+                                        pass
+                            await page.select_option("#tsc", "Весь регіон")
+                            await page.select_option("#type_venichle", tv)
+                            await asyncio.sleep(random.uniform(0.5, 1.2))
+                            # no_wait_after: the click triggers a POST navigation; we capture it via
+                            # expect_response, so don't let the click itself block waiting for the nav.
+                            async with page.expect_response(
+                                lambda r: r.request.method == "POST" and "check-leisure-license-plates" in r.url,
+                                timeout=45000,
+                            ) as ri:
+                                await page.locator("input[type=submit]").last.click(
+                                    timeout=15000, no_wait_after=True
+                                )
+                            body = await (await ri.value).text()
+                            if "Номерний" not in body:
+                                raise RuntimeError("no results table (likely blocked)")
+                            out.extend(_parse_table(body, rn, tl))
+                            ok_scopes.add((rn, tl))
+                            await asyncio.sleep(random.uniform(0.8, 1.6))
+                            break  # scope succeeded
+                        except Exception as exc:  # noqa: BLE001
+                            if attempt == 2:
+                                fail_scopes.append((rn, tl))
+                                log(f"{rn}/{tl} FAILED: {exc!r}")
+                            else:
+                                await asyncio.sleep(random.uniform(1.5, 3.5))
+                                await _human(page, 2)
                 log(f"region done: {rn} · running total {len(out)}")
         finally:
             await browser.close()
