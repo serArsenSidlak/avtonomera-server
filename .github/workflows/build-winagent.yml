@@ -1,0 +1,51 @@
+name: Build Windows agent
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'winagent/**'
+      - '.github/workflows/build-winagent.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r winagent/requirements.txt
+
+      - name: Inject config (server URL + ingest secret)
+        shell: bash
+        run: |
+          cat > winagent/agent_config.py <<CFG
+          SERVER_URL = "https://34.123.136.171.nip.io"
+          INGEST_SECRET = "${{ secrets.INGEST_SECRET }}"
+          CFG
+
+      - name: Build exe
+        working-directory: winagent
+        run: pyinstaller --onefile --name AvtonomeraAgent --collect-all playwright scrape_agent.py
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AvtonomeraAgent
+          path: winagent/dist/AvtonomeraAgent.exe
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: winagent-latest
+          name: Автономера — Windows agent (latest)
+          files: winagent/dist/AvtonomeraAgent.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
