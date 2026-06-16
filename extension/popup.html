@@ -1,14 +1,11 @@
 <!doctype html><html lang="uk"><head><meta charset="utf-8">
-<style>
-body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:320px;padding:14px;background:#0f1115;color:#eef1f6}
-h3{margin:0 0 6px}b{color:#7dd3fc}button{display:block;width:100%;margin:7px 0;padding:11px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;color:#fff}
-.csv{background:#16a34a}.json{background:#3b82f6}.clr{background:#374151}small{color:#9aa4b2}
-</style></head><body>
-<h3>🚗 Автономера — таблиця</h3>
-<p>Зібрано рядків: <b id="c">0</b></p>
-<button class="csv" id="csv">⬇️ Завантажити таблицю (CSV)</button>
-<button class="json" id="json">⬇️ JSON</button>
-<button class="clr" id="clr">🗑 Очистити</button>
-<small>Ходи по кабінету водія і роби пошуки (≤9/хв). Кожна відповідь з номерами автоматично додається в таблицю: номер, ціна, ТСЦ, регіон, тип ТЗ.</small>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:320px;padding:14px;background:#0f1115;color:#eef1f6}
+h3{margin:0 0 6px}button{display:block;width:100%;margin:8px 0;padding:12px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;color:#fff;background:#16a34a}
+#status{margin-top:10px;padding:10px;background:#1b1f27;border-radius:8px;font-size:13px;white-space:pre-wrap;min-height:34px}small{color:#9aa4b2}</style>
+</head><body>
+<h3>🚗 Автономера — авто-збирач</h3>
+<small>Авто-збір кожні 3 год (поки браузер відкритий і ти залогінений на e-driver). Дані йдуть у чергу — адмін підтверджує оновлення в боті.</small>
+<button id="go">▶️ Зібрати зараз</button>
+<div id="status">—</div>
 <script src="popup.js"></script>
 </body></html>

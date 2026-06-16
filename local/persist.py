@@ -96,6 +96,33 @@ async def apply_table(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"processed": len(rows), "new_ids": new_ids}
 
 
+async def commit_staging() -> Dict[str, Any]:
+    """Apply the staged rows (from /stage) to the DB, then clear the queue."""
+    import json
+
+    rows: List[Dict[str, Any]] = []
+    try:
+        with open(config.STAGE_PATH, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        rows.append(json.loads(line))
+                    except ValueError:
+                        pass
+    except FileNotFoundError:
+        rows = []
+    res = await apply_table(rows) if rows else {"processed": 0, "new_ids": []}
+    notified = await notify_new(res["new_ids"]) if rows else 0
+    try:
+        open(config.STAGE_PATH, "w", encoding="utf-8").close()
+    except OSError:
+        pass
+    await db.set_meta("stage_pending", "0")
+    await db.set_meta("stage_count", "0")
+    return {"processed": res["processed"], "new": len(res["new_ids"]), "notified": notified}
+
+
 def parse_table_csv(text: str) -> List[Dict[str, Any]]:
     """Parse the extension's CSV (Номер;Ціна;Сервісний центр;Регіон;Тип ТЗ) into row dicts."""
     import csv

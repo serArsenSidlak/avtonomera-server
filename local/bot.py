@@ -1490,6 +1490,7 @@ async def render_admin(bot: Bot, chat_id: int) -> None:
     b.button(text="📣 Розсилка", callback_data="a_bcast")
     b.button(text="📢 Оживити чати", callback_data="a_refresh")
     b.button(text="📥 Імпорт CSV", callback_data="a_import")
+    b.button(text="🔄 Оновити базу", callback_data="a_commit")
     b.button(text="🐞 Звіти про помилки", callback_data="a_reports")
     if _is_super(chat_id):
         b.button(text="👮 Адміни", callback_data="a_admins")
@@ -1977,6 +1978,42 @@ async def cb_rst(cq: CallbackQuery) -> None:
     await cq.answer()
 
 
+async def _commit_task(bot: Bot, chat_id: int) -> None:
+    """Apply the staged update queue to the DB and report."""
+    from local.persist import commit_staging
+    try:
+        res = await commit_staging()
+        await bot.send_message(
+            chat_id,
+            f"✅ Базу оновлено з черги.\n📊 Оброблено: {res['processed']}\n🆕 Нових: {res['new']}\n"
+            f"📨 Сповіщень: {res['notified']}",
+            reply_markup=kb_back([("🛠 Адмінка", "admin")]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await bot.send_message(chat_id, f"❌ Помилка оновлення: {exc!r}")
+
+
+@dp.callback_query(F.data == "a_commit")
+async def cb_a_commit(cq: CallbackQuery) -> None:
+    """Commit the staged update queue (from the extension) to the DB."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    pending = await db.get_meta("stage_pending")
+    cnt = await db.get_meta("stage_count") or "0"
+    if pending != "1":
+        await show(cq.message.bot, cq.message.chat.id,
+                   "🔄 <b>Оновити базу</b>\n\nНаразі немає нових даних у черзі очікування.",
+                   kb_back([("🛠 Адмінка", "admin")]))
+        await cq.answer()
+        return
+    ts = await db.get_meta("stage_ts") or "?"
+    await show(cq.message.bot, cq.message.chat.id,
+               f"🔄 Оновлюю базу з черги ({cnt} номерів, від {str(ts)[:16].replace('T', ' ')})…",
+               kb_back([("🛠 Адмінка", "admin")]))
+    await cq.answer("Оновлюю…")
+    asyncio.create_task(_commit_task(cq.message.bot, cq.message.chat.id))
+
+
 @dp.callback_query(F.data == "a_import")
 async def cb_a_import(cq: CallbackQuery, state: FSMContext) -> None:
     """Prompt the admin to upload a CSV table (alternative DB-update method)."""
@@ -2156,6 +2193,31 @@ async def fallback(message: Message) -> None:
     await render_main(message.bot, message.chat.id)
 
 
+async def _auto_commit_loop(bot: Bot) -> None:
+    """Auto-commit the staged queue if it has waited longer than STAGE_AUTOCOMMIT_HOURS."""
+    import datetime as dt
+    while True:
+        await asyncio.sleep(1800)  # check every 30 min
+        try:
+            if (await db.get_meta("stage_pending")) != "1":
+                continue
+            ts = await db.get_meta("stage_ts")
+            if not ts:
+                continue
+            age = dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(ts)
+            if age.total_seconds() >= config.STAGE_AUTOCOMMIT_HOURS * 3600:
+                from local.persist import commit_staging
+                res = await commit_staging()
+                if config.ADMIN_CHAT_ID:
+                    await bot.send_message(
+                        config.ADMIN_CHAT_ID,
+                        f"♻️ <b>Авто-оновлення бази</b> (минуло {config.STAGE_AUTOCOMMIT_HOURS} год без ручного):\n"
+                        f"оброблено {res['processed']}, нових {res['new']}, сповіщень {res['notified']}.",
+                    )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[autocommit] {exc!r}")
+
+
 async def _periodic_refresh(bot: Bot) -> None:
     """Every config.REFRESH_HOURS, bump all chats with a fresh 'base updated' menu."""
     while True:
@@ -2198,6 +2260,7 @@ async def main() -> None:
         pass
     if config.REFRESH_HOURS > 0:
         asyncio.create_task(_periodic_refresh(bot))
+    asyncio.create_task(_auto_commit_loop(bot))
     print(f"Bot @{BOT_USERNAME} started (Моніторинг Автономерів, long polling). Ctrl+C to stop.")
     await dp.start_polling(bot)
 

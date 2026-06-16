@@ -53,6 +53,11 @@ API_RATE_PER_MIN: int = int(os.environ.get("LOCAL_API_RATE_PER_MIN", "120"))
 # (bumps the chat back up Telegram's list). Hours; 0 disables. Default daily.
 REFRESH_HOURS: int = int(os.environ.get("LOCAL_REFRESH_HOURS", "24"))
 
+# Staging file for moderated DB updates (extension → /stage → admin commits, or auto after N h).
+STAGE_PATH: str = os.environ.get("LOCAL_STAGE_PATH", str(_ROOT / "staging.jsonl"))
+# Auto-commit staged data older than this many hours (if admin didn't commit manually).
+STAGE_AUTOCOMMIT_HOURS: int = int(os.environ.get("LOCAL_STAGE_AUTOCOMMIT_HOURS", "12"))
+
 # Database backend: "sqlite" (local MVP) or "postgres" (Supabase). Switch after migration.
 DB_BACKEND: str = os.environ.get("LOCAL_DB_BACKEND", "sqlite")
 # Postgres / Supabase connection (used when DB_BACKEND == "postgres").

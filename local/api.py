@@ -49,7 +49,7 @@ async def guard(request: Request, call_next):
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
 
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
-    if config.API_KEY and path not in _OPEN_PATHS and path not in ("/ingest", "/parse-job"):
+    if config.API_KEY and path not in _OPEN_PATHS and path not in ("/ingest", "/parse-job", "/stage"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -191,6 +191,57 @@ async def ingest(request: Request) -> dict:
         "scraped": applied["scraped"], "new": len(applied["new_ids"]),
         "removed": applied["removed"], "notified": notified,
     }
+
+
+@app.post("/stage")
+async def stage(request: Request) -> dict:
+    """Receive a collected batch into the staging queue (NOT applied to the DB yet).
+
+    Body: {secret, rows:[...], reset?:bool, done?:bool}. The browser extension sends reset=true
+    on the first scope, appends rows per scope, and done=true at the end (which marks the queue
+    pending and notifies the admin). The admin then commits it (or it auto-commits after N hours).
+    """
+    import json as _json
+
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "staging disabled (no secret configured)")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    if body.get("reset"):
+        open(config.STAGE_PATH, "w", encoding="utf-8").close()
+    rows = body.get("rows") or []
+    if rows:
+        with open(config.STAGE_PATH, "a", encoding="utf-8") as fh:
+            for r in rows:
+                fh.write(_json.dumps(r, ensure_ascii=False) + "\n")
+    total = 0
+    try:
+        with open(config.STAGE_PATH, encoding="utf-8") as fh:
+            total = sum(1 for _ in fh)
+    except FileNotFoundError:
+        total = 0
+    if body.get("done"):
+        import datetime as dt
+        await db.set_meta("stage_ts", dt.datetime.now(dt.timezone.utc).isoformat())
+        await db.set_meta("stage_pending", "1")
+        await db.set_meta("stage_count", str(total))
+        if config.BOT_TOKEN and config.ADMIN_CHAT_ID:
+            from aiogram import Bot
+            from aiogram.client.default import DefaultBotProperties
+            bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
+            try:
+                await bot.send_message(
+                    config.ADMIN_CHAT_ID,
+                    f"📥 <b>Отримано оновлений список</b>: {total} номерів у черзі.\n"
+                    f"Оновити базу? Адмінка → <b>🔄 Оновити базу</b>.\n"
+                    f"<i>Якщо не оновити вручну — автоматично за {config.STAGE_AUTOCOMMIT_HOURS} год.</i>",
+                )
+            except Exception:  # noqa: BLE001
+                pass
+            finally:
+                await bot.session.close()
+    return {"staged": len(rows), "total": total}
 
 
 def main() -> None:
