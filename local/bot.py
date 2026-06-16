@@ -2026,6 +2026,17 @@ async def fallback(message: Message) -> None:
     await render_main(message.bot, message.chat.id)
 
 
+async def _periodic_refresh(bot: Bot) -> None:
+    """Every config.REFRESH_HOURS, bump all chats with a fresh 'base updated' menu."""
+    while True:
+        await asyncio.sleep(config.REFRESH_HOURS * 3600)
+        try:
+            n = await push_refresh_all(bot)
+            print(f"[refresh] periodic: bumped {n} chats")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[refresh] periodic failed: {exc!r}")
+
+
 async def main() -> None:
     """Initialise the DB and start long polling."""
     if not config.BOT_TOKEN:
@@ -2055,6 +2066,8 @@ async def main() -> None:
         )
     except Exception:
         pass
+    if config.REFRESH_HOURS > 0:
+        asyncio.create_task(_periodic_refresh(bot))
     print(f"Bot @{BOT_USERNAME} started (Моніторинг Автономерів, long polling). Ctrl+C to stop.")
     await dp.start_polling(bot)
 

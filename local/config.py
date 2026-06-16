@@ -49,6 +49,10 @@ API_KEY: str = os.environ.get("LOCAL_API_KEY", "")
 # Per-IP rate limit for the API (requests per minute).
 API_RATE_PER_MIN: int = int(os.environ.get("LOCAL_API_RATE_PER_MIN", "120"))
 
+# Periodic "base updated" re-engagement: how often the bot pushes a fresh menu to every user
+# (bumps the chat back up Telegram's list). Hours; 0 disables. Default daily.
+REFRESH_HOURS: int = int(os.environ.get("LOCAL_REFRESH_HOURS", "24"))
+
 # Database backend: "sqlite" (local MVP) or "postgres" (Supabase). Switch after migration.
 DB_BACKEND: str = os.environ.get("LOCAL_DB_BACKEND", "sqlite")
 # Postgres / Supabase connection (used when DB_BACKEND == "postgres").
