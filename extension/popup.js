@@ -1,9 +1,19 @@
-function r(){ chrome.storage.local.get({entries:[]}, d=>{ document.getElementById("c").textContent=d.entries.length; }); }
-document.getElementById("dl").onclick=function(){
-  chrome.storage.local.get({entries:[]}, d=>{
-    const blob=new Blob([JSON.stringify(d.entries,null,2)],{type:"application/json"});
-    chrome.downloads.download({url:URL.createObjectURL(blob), filename:"avto-traffic.json", saveAs:true});
+function csvCell(v){ v = (v==null?"":String(v)); return /[",\n;]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; }
+function refresh(){ chrome.storage.local.get({table:{}}, d=>{ document.getElementById("c").textContent = Object.keys(d.table).length; }); }
+function dl(name, text, mime){
+  const blob = new Blob([text], {type: mime});
+  chrome.downloads.download({ url: URL.createObjectURL(blob), filename: name, saveAs: true });
+}
+document.getElementById("csv").onclick = function(){
+  chrome.storage.local.get({table:{}}, d=>{
+    const rows = Object.values(d.table);
+    const head = "Номер;Ціна;Сервісний центр;Регіон;Тип ТЗ\n";
+    const body = rows.map(r=>[r.plate,r.price,r.tsc,r.region,r.type].map(csvCell).join(";")).join("\n");
+    dl("avtonomera.csv", "﻿"+head+body, "text/csv;charset=utf-8");
   });
 };
-document.getElementById("clr").onclick=function(){ chrome.storage.local.set({entries:[]}, r); };
-setInterval(r,1000); r();
+document.getElementById("json").onclick = function(){
+  chrome.storage.local.get({table:{}}, d=>dl("avtonomera.json", JSON.stringify(Object.values(d.table),null,2), "application/json"));
+};
+document.getElementById("clr").onclick = function(){ chrome.storage.local.set({table:{}}, refresh); };
+setInterval(refresh,1000); refresh();

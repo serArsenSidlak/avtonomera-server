@@ -1,10 +1,10 @@
-// Store every captured entry in chrome.storage.local (bounded).
+// Accumulates parsed rows into a de-duplicated table (key = plate|tsc).
 chrome.runtime.onMessage.addListener(function (msg) {
-  if (msg && msg.type === "cap") {
-    chrome.storage.local.get({ entries: [] }, function (d) {
-      d.entries.push(msg.e);
-      if (d.entries.length > 6000) d.entries = d.entries.slice(-6000);
-      chrome.storage.local.set({ entries: d.entries });
+  if (msg && msg.type === "rows") {
+    chrome.storage.local.get({ table: {} }, function (d) {
+      const t = d.table;
+      for (const r of msg.rows) t[r.plate + "|" + r.tsc] = r;
+      chrome.storage.local.set({ table: t });
     });
   }
 });
