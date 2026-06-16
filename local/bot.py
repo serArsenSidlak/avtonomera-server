@@ -1802,13 +1802,14 @@ async def cb_a_scan(cq: CallbackQuery) -> None:
     if not await db.is_admin(cq.message.chat.id):
         return
     b = InlineKeyboardBuilder()
-    b.button(text="🌍 Усі регіони", callback_data="a_scan_all")
-    b.button(text="📍 По регіону", callback_data="a_scan_region")
+    b.button(text="🌍 Усі регіони (всі типи)", callback_data="a_scan_all")
+    b.button(text="📍 Регіон + тип ТЗ", callback_data="a_scan_region")
+    b.button(text="📊 Звіт по ТСЦ", callback_data="a_rep_region")
     b.button(text="🛠 Адмінка", callback_data="admin")
     b.adjust(1)
     await show(cq.message.bot, cq.message.chat.id,
-              "🕷 <b>Запуск парсера</b>\nЗапит піде у чергу; парсер виконається на Маку "
-              "(residential IP), звіт прийде сюди. Скан може тривати довго.",
+              "🅿️ <b>Парсер</b>\nЗапит іде в чергу; парсер на Маку виконує саме обраний скоуп "
+              "(регіон+тип) і шле звіт сюди. Або переглянь розбивку по ТСЦ.",
               b.as_markup())
     await cq.answer()
 
@@ -1860,28 +1861,118 @@ async def cb_a_scan_all(cq: CallbackQuery) -> None:
     await cq.answer("Поставлено в чергу")
 
 
-@dp.callback_query(F.data == "a_scan_region")
-async def cb_a_scan_region(cq: CallbackQuery) -> None:
-    """Pick a region to scan."""
-    if not await db.is_admin(cq.message.chat.id):
-        return
+async def _region_picker(cq: CallbackQuery, action: str, title: str) -> None:
+    """Show regions as buttons; callback `<action>:<regionIndex>` (index into distinct_regions)."""
+    regions = await db.distinct_regions()
     b = InlineKeyboardBuilder()
-    for r in await db.distinct_regions():
-        b.button(text=r, callback_data=f"a_scanr:{r}")
+    for i, r in enumerate(regions):
+        b.button(text=r, callback_data=f"{action}:{i}")
     b.button(text="🛠 Адмінка", callback_data="admin")
     b.adjust(2)
-    await show(cq.message.bot, cq.message.chat.id, "📍 Обери регіон для скану:", b.as_markup())
+    await show(cq.message.bot, cq.message.chat.id, title, b.as_markup())
     await cq.answer()
 
 
-@dp.callback_query(F.data.startswith("a_scanr:"))
-async def cb_a_scanr(cq: CallbackQuery) -> None:
-    """Queue a single-region scan (executed by the Mac worker)."""
+async def _type_picker(cq: CallbackQuery, action: str, region_idx: int, title: str, all_label: str) -> None:
+    """Show vehicle types; callback `<action>:<regionIndex>:<typeIndex>` (-1 = all types)."""
+    types = await db.distinct_vehicle_types()
+    b = InlineKeyboardBuilder()
+    b.button(text=all_label, callback_data=f"{action}:{region_idx}:-1")
+    for j, t in enumerate(types):
+        b.button(text=t, callback_data=f"{action}:{region_idx}:{j}")
+    b.button(text="🛠 Адмінка", callback_data="admin")
+    b.adjust(1)
+    await show(cq.message.bot, cq.message.chat.id, title, b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_scan_region")
+async def cb_a_scan_region(cq: CallbackQuery) -> None:
+    """Step 1: pick a region to scan."""
     if not await db.is_admin(cq.message.chat.id):
         return
-    region = cq.data.split(":", 1)[1]
-    await _queue_scan(cq.message.bot, cq.message.chat.id, {region})
+    await _region_picker(cq, "psr", "📍 Обери <b>регіон</b> для парсингу:")
+
+
+@dp.callback_query(F.data.startswith("psr:"))
+async def cb_psr(cq: CallbackQuery) -> None:
+    """Step 2: pick a vehicle type for the chosen region."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    i = int(cq.data.split(":", 1)[1])
+    regions = await db.distinct_regions()
+    rname = regions[i] if 0 <= i < len(regions) else "?"
+    await _type_picker(cq, "pst", i, f"📍 {rname}\n🚗 Обери <b>тип ТЗ</b> для парсингу:", "✅ Усі типи")
+
+
+@dp.callback_query(F.data.startswith("pst:"))
+async def cb_pst(cq: CallbackQuery) -> None:
+    """Step 3: enqueue a scoped scan (region + type) for the Mac worker."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    _, si, sj = cq.data.split(":")
+    regions = await db.distinct_regions()
+    types = await db.distinct_vehicle_types()
+    region = regions[int(si)] if 0 <= int(si) < len(regions) else None
+    if region is None:
+        await cq.answer("Регіон не знайдено", show_alert=True)
+        return
+    vtype = types[int(sj)] if int(sj) >= 0 and int(sj) < len(types) else None
+    only = [[region, vtype]] if vtype else None
+    await _queue_scan(cq.message.bot, cq.message.chat.id, {region}, only_scopes=only)
     await cq.answer("Поставлено в чергу")
+
+
+@dp.callback_query(F.data == "a_rep_region")
+async def cb_a_rep_region(cq: CallbackQuery) -> None:
+    """TSC report step 1: pick region."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    await _region_picker(cq, "rsr", "📊 Звіт по ТСЦ — обери <b>регіон</b>:")
+
+
+@dp.callback_query(F.data.startswith("rsr:"))
+async def cb_rsr(cq: CallbackQuery) -> None:
+    """TSC report step 2: pick type."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    i = int(cq.data.split(":", 1)[1])
+    regions = await db.distinct_regions()
+    rname = regions[i] if 0 <= i < len(regions) else "?"
+    await _type_picker(cq, "rst", i, f"📊 {rname}\n🚗 Обери <b>тип ТЗ</b> для звіту:", "✅ Усі типи")
+
+
+@dp.callback_query(F.data.startswith("rst:"))
+async def cb_rst(cq: CallbackQuery) -> None:
+    """TSC report step 3: show per-parking breakdown from the DB."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    _, si, sj = cq.data.split(":")
+    regions = await db.distinct_regions()
+    types = await db.distinct_vehicle_types()
+    region = regions[int(si)] if 0 <= int(si) < len(regions) else None
+    vtype = types[int(sj)] if int(sj) >= 0 and int(sj) < len(types) else None
+    rows = await db.tsc_breakdown(region, vtype)
+    head = f"📊 <b>Звіт по ТСЦ</b>\n🌍 {region or 'усі'} · 🚗 {vtype or 'усі типи'}\n"
+    if not rows:
+        await show(cq.message.bot, cq.message.chat.id, head + "\nНемає доступних номерів.",
+                   kb_back([("🅿️ Парсер", "a_scan"), ("🛠 Адмінка", "admin")]))
+        await cq.answer()
+        return
+    total = sum(r["cnt"] for r in rows)
+    lines = [head, f"Усього доступних: <b>{total}</b> у {len(rows)} ТСЦ\n"]
+    for r in rows[:40]:
+        pr = ""
+        if r.get("pmin") is not None:
+            lo, hi = int(r["pmin"]), int(r["pmax"])
+            pr = f" · 💰 {lo}" + (f"–{hi}" if hi != lo else "") + " грн"
+        addr = f"\n   {r['address']}" if r.get("address") else ""
+        lines.append(f"• <b>{r['tsc'] or '—'}</b>: {r['cnt']} шт{pr}{addr}")
+    if len(rows) > 40:
+        lines.append(f"…ще {len(rows) - 40} ТСЦ")
+    await show(cq.message.bot, cq.message.chat.id, "\n".join(lines),
+               kb_back([("🅿️ Парсер", "a_scan"), ("🛠 Адмінка", "admin")]))
+    await cq.answer()
 
 
 @dp.callback_query(F.data == "a_reports")

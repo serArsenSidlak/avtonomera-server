@@ -490,6 +490,24 @@ async def feed_count(
     return int(await _fetchval("SELECT COUNT(*) FROM feed_events WHERE " + " AND ".join(where), *params))
 
 
+async def tsc_breakdown(region: Optional[str] = None, vehicle_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Per-TSC breakdown of AVAILABLE plates (count, price range, address) for a region+type."""
+    where = ["p.is_available = 1"]
+    params: List[Any] = []
+    if region:
+        where.append("p.region = ?")
+        params.append(region)
+    if vehicle_type:
+        where.append("p.vehicle_type = ?")
+        params.append(vehicle_type)
+    sql = (
+        "SELECT p.tsc, COUNT(*) cnt, MIN(p.price) pmin, MAX(p.price) pmax, t.address "
+        "FROM plates p LEFT JOIN tsc t ON p.tsc = t.code WHERE " + " AND ".join(where)
+        + " GROUP BY p.tsc, t.address ORDER BY cnt DESC"
+    )
+    return [dict(r) for r in await _fetch(sql, *params)]
+
+
 async def plate_locations(plate_number: str) -> List[Dict[str, Any]]:
     """All rows (TSC/type/price/address) for a given plate number."""
     from local.plate import normalize_plate

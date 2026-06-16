@@ -48,8 +48,8 @@ async def guard(request: Request, call_next):
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
 
-    # App API key (skip health/open and the secret-protected /ingest).
-    if config.API_KEY and path not in _OPEN_PATHS and path != "/ingest":
+    # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
+    if config.API_KEY and path not in _OPEN_PATHS and path not in ("/ingest", "/parse-job"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
