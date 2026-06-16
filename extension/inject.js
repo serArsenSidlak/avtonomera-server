@@ -1,28 +1,40 @@
-// MAIN world: capture the Authorization header the app uses (so we can reuse the session).
+// MAIN world: passively capture every fetch + XHR (request + response) and post to the page.
 (function () {
-  function send(entry) { try { window.postMessage({ __avtoAuth: true, entry: entry }, "*"); } catch (e) {} }
-  function authOf(h) {
+  function send(e) { try { window.postMessage({ __avtoCap: true, e: e }, "*"); } catch (x) {} }
+  function hdrs(h) {
+    const o = {};
     try {
-      if (!h) return null;
-      if (h.get) return h.get("authorization") || h.get("Authorization");
-      if (typeof h === "object") for (const k in h) if (k.toLowerCase() === "authorization") return h[k];
-    } catch (e) {}
-    return null;
+      if (!h) return o;
+      if (h.forEach) { h.forEach((v, k) => (o[k] = v)); return o; }
+      if (Array.isArray(h)) { h.forEach(([k, v]) => (o[k] = v)); return o; }
+      if (typeof h === "object") for (const k in h) o[k] = h[k];
+    } catch (x) {}
+    return o;
   }
   const oFetch = window.fetch;
   if (oFetch) {
-    window.fetch = function (...args) {
+    window.fetch = async function (...args) {
+      let url = args[0]; if (url && url.url) url = url.url;
+      const init = args[1] || {};
+      const method = (init.method) || (args[0] && args[0].method) || "GET";
+      const reqHeaders = hdrs(init.headers || (args[0] && args[0].headers));
+      const reqBody = (typeof init.body === "string") ? init.body : null;
+      let res;
+      try { res = await oFetch.apply(this, args); } catch (err) { send({ url: String(url), method, reqHeaders, reqBody, status: "ERR", body: String(err) }); throw err; }
       try {
-        const init = args[1] || {};
-        const a = authOf(init.headers) || (args[0] && args[0].headers ? authOf(args[0].headers) : null);
-        if (a) send({ auth: a });
-      } catch (e) {}
-      return oFetch.apply(this, args);
+        res.clone().text().then((body) => send({ url: String(url), method, reqHeaders, reqBody, status: res.status, body }));
+      } catch (x) {}
+      return res;
     };
   }
-  const oSet = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-    try { if (k && k.toLowerCase() === "authorization") send({ auth: v }); } catch (e) {}
-    return oSet.apply(this, arguments);
+  const oOpen = XMLHttpRequest.prototype.open, oSend = XMLHttpRequest.prototype.send, oSet = XMLHttpRequest.prototype.setRequestHeader;
+  XMLHttpRequest.prototype.open = function (m, u) { this.__c = { method: m, url: u, reqHeaders: {} }; return oOpen.apply(this, arguments); };
+  XMLHttpRequest.prototype.setRequestHeader = function (k, v) { try { if (this.__c) this.__c.reqHeaders[k] = v; } catch (x) {} return oSet.apply(this, arguments); };
+  XMLHttpRequest.prototype.send = function (b) {
+    const x = this; if (x.__c) x.__c.reqBody = (typeof b === "string") ? b : null;
+    x.addEventListener("load", function () {
+      try { send({ url: (x.__c && x.__c.url) || "", method: (x.__c && x.__c.method) || "GET", reqHeaders: (x.__c && x.__c.reqHeaders) || {}, reqBody: (x.__c && x.__c.reqBody) || null, status: x.status, body: x.responseText }); } catch (e) {}
+    });
+    return oSend.apply(this, arguments);
   };
 })();
