@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Автономера — збирач номерів (e-driver)",
-  "version": "4.0",
+  "version": "5.0",
   "description": "Збирає доступні номерні знаки через API e-driver.mvs.gov.ua у твоїй сесії і шле на сервер Автономера.",
   "permissions": [
     "storage",

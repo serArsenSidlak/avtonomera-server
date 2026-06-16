@@ -12,7 +12,7 @@ const TYPE_GROUPS = [
   { codes: [1000428, 3], label: "Легковий, вантажний" },
   { codes: [1000436], label: "Електромобіль" },
 ];
-const NUMS = ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
+const NUMS = [""]; // gentle: single request per scope (empty filter returns all)
 function titleUA(s) {
   return (s || "").toLowerCase().replace(/(^|[\s\-.])([a-zа-яіїєґ'])/g, (m, p, c) => p + c.toUpperCase());
 }
@@ -68,9 +68,10 @@ async function scan() {
             }
           }
         } catch (e) {}
-        await sleep(250);
+        await sleep(800 + Math.random() * 700);
       }
       done++;
+      await sleep(3000 + Math.random() * 4000); // gentle pacing between scopes (avoid block)
       if (ok) {
         buffer[rname + "|||" + g.label] = rows;
         await saveBuffer(buffer);
