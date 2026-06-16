@@ -11,6 +11,7 @@ const TYPE_GROUPS = [
   { codes: [1000436], label: "Електромобіль" },
 ];
 const REQ_GAP_MS = 7000; // ~8.5 req/min, under the ≤9/min limit
+const NUMS = ["0","1","2","3","4","5","6","7","8","9"]; // first digit (num="" is NOT comprehensive)
 function titleUA(s) { return (s || "").toLowerCase().replace(/(^|[\s\-.])([a-zа-яіїєґ'])/g, (m, p, c) => p + c.toUpperCase()); }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const getToken = () => new Promise((r) => chrome.storage.local.get({ authToken: null }, (d) => r(d.authToken)));
@@ -36,25 +37,36 @@ async function harvest() {
     if (!res.ok) { setStatus("Регіони HTTP " + res.status); return; }
     const regions = await res.json();
     await stage([], true, false); // reset the queue → fresh snapshot
-    let done = 0, grand = 0; const okScopes = []; const total = regions.length * TYPE_GROUPS.length;
+    let done = 0, grand = 0, req = 0; const okScopes = [];
+    const total = regions.length * TYPE_GROUPS.length;
+    const totalReq = total * NUMS.length;
     for (const reg of regions) {
       const rname = titleUA(reg.name);
       for (const g of TYPE_GROUPS) {
-        try {
-          const r = await api("/api/plate/reserve", "POST", JSON.stringify({ reg: String(reg.id), type: g.codes, num: "" }));
-          if (r.ok) {
-            const arr = await r.json();
-            okScopes.push([rname, g.label]);  // count even empty scopes for accurate removals
-            const rows = (Array.isArray(arr) ? arr : []).map((p) => ({
-              plate_number: p.plate, region: rname, tsc: p.depName || null,
-              vehicle_type: g.label, price: p.cost ? parseFloat(p.cost) : null,
-            }));
-            if (rows.length) { await stage(rows, false, false); grand += rows.length; }
-          }
-        } catch (e) {}
+        const rows = [], seen = new Set(); let okAny = false;
+        for (const num of NUMS) {  // iterate first digit 0–9 (each returns plates with that lead digit)
+          try {
+            const r = await api("/api/plate/reserve", "POST", JSON.stringify({ reg: String(reg.id), type: g.codes, num }));
+            if (r.ok) {
+              okAny = true;
+              const arr = await r.json();
+              if (Array.isArray(arr)) for (const p of arr) {
+                const k = p.plate + "|" + (p.depName || "");
+                if (seen.has(k)) continue; seen.add(k);
+                rows.push({ plate_number: p.plate, region: rname, tsc: p.depName || null,
+                            vehicle_type: g.label, price: p.cost ? parseFloat(p.cost) : null });
+              }
+            }
+          } catch (e) {}
+          req++;
+          setStatus(`🔎 ${rname}/${g.label} цифра ${num} · зібрано ${grand + rows.length} · запит ${req}/${totalReq}`);
+          await sleep(REQ_GAP_MS + Math.random() * 1500);
+        }
         done++;
-        setStatus(`🔎 Зібрано ${grand} · ${done}/${total} (${rname})`);
-        await sleep(REQ_GAP_MS + Math.random() * 1500);
+        if (okAny) {
+          okScopes.push([rname, g.label]);
+          if (rows.length) { await stage(rows, false, false); grand += rows.length; }
+        }
       }
     }
     await stage([], false, true, okScopes); // done → server marks pending + notifies admin
