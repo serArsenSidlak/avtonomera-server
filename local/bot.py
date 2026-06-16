@@ -83,20 +83,25 @@ async def _adopt_screen(handler, event, data):
 
 # ── keyboards / screen management ─────────────────
 def kb_main() -> InlineKeyboardMarkup:
-    """Main menu keyboard."""
+    """Main menu — monitoring-first, with grouped secondary actions."""
     b = InlineKeyboardBuilder()
-    b.button(text="🔍 Пошук", callback_data="search")
-    b.button(text="📰 Стрічка", callback_data="feed")
+    # ── Головне: моніторинг номера ──
+    b.button(text="🔔 Стежити за номером", callback_data="newhunt")
+    b.button(text="🎯 Мої моніторинги", callback_data="myhunts")
+    # ── Пошук і добірки ──
+    b.button(text="🔍 Пошук номера", callback_data="search")
     b.button(text="✨ Добірки", callback_data="cols")
+    # ── Що нового ──
+    b.button(text="📰 Нові / зниклі", callback_data="feed")
     b.button(text="🔥 Популярні", callback_data="popular")
     b.button(text="⭐ Обрані", callback_data="favs")
-    b.button(text="🎯 Мої моніторинги", callback_data="myhunts")
-    b.button(text="➕ Новий моніторинг", callback_data="newhunt")
-    b.button(text="👥 Запросити друзів", callback_data="ref")
+    # ── Акаунт ──
     b.button(text="💎 Тариф", callback_data="plan")
+    b.button(text="👥 Друзі", callback_data="ref")
     b.button(text="📊 Статистика", callback_data="stats")
     b.button(text="ℹ️ Довідка", callback_data="help")
-    b.adjust(2, 2, 2, 2, 2, 1)
+    # hero (1) · мої (1) · пошук+добірки (2) · стрічка+популярні (2) · обрані+тариф (2) · друзі+стата (2) · довідка (1)
+    b.adjust(1, 1, 2, 2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -220,10 +225,10 @@ async def render_main(bot: Bot, chat_id: int, banner: str = "") -> None:
     text = (
         (banner + "\n\n" if banner else "")
         + "🇺🇦 <b>Моніторинг Автономерів</b>\n"
-        "<i>Пошук і моніторинг автомобільних номерів ГСЦ МВС</i>\n\n"
-        f"📦 База: <b>{total:,}</b> номерів".replace(",", " ") + "\n"
+        "<i>Постав номер на стеження — і дізнайся першим, щойно він зʼявиться.</i>\n\n"
+        f"📦 У базі: <b>{total:,}</b> номерів".replace(",", " ") + "\n"
         f"💎 Тариф: <b>{plan}</b>\n\n"
-        "Обери дію 👇"
+        "👇 Створи моніторинг або скористайся пошуком"
     )
     markup = kb_main()
     if await db.is_admin(chat_id):
