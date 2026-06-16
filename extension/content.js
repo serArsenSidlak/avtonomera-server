@@ -1,6 +1,5 @@
-// Captures the Authorization token (from MAIN-world inject) AND runs the harvest in-page
-// (same-origin fetch to e-driver = real authenticated context). Collected scopes go to the
-// background, which forwards them to our server.
+// Token capture + controllable harvest (Start/Stop) that ACCUMULATES into a buffer; sending to
+// the server is a separate explicit action. Runs in-page (same-origin authenticated context).
 window.addEventListener("message", function (e) {
   if (e.source !== window || !e.data || !e.data.__avtoAuth) return;
   const a = e.data.entry && e.data.entry.auth;
@@ -8,14 +7,10 @@ window.addEventListener("message", function (e) {
 });
 
 const BASE = "https://e-driver.mvs.gov.ua";
+// For now: only cars/trucks + electric cars (per product decision).
 const TYPE_GROUPS = [
   { codes: [1000428, 3], label: "Легковий, вантажний" },
   { codes: [1000436], label: "Електромобіль" },
-  { codes: [1000437], label: "Причіп" },
-  { codes: [1000457], label: "Мотоцикл" },
-  { codes: [1000458], label: "Електромотоцикл" },
-  { codes: [1000443], label: "Мопед" },
-  { codes: [1000444], label: "Електромопед" },
 ];
 const NUMS = ["", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9"];
 function titleUA(s) {
@@ -24,8 +19,13 @@ function titleUA(s) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const getToken = () => new Promise((r) => chrome.storage.local.get({ authToken: null }, (d) => r(d.authToken)));
 const setStatus = (s) => chrome.storage.local.set({ status: s, statusTs: Date.now() });
+const loadBuffer = () => new Promise((r) => chrome.storage.local.get({ buffer: {} }, (d) => r(d.buffer)));
+const saveBuffer = (b) => new Promise((r) => chrome.storage.local.set({ buffer: b }, r));
 const pushScope = (rname, label, rows) =>
   new Promise((res) => chrome.runtime.sendMessage({ type: "pushScope", rname, label, rows }, (r) => res(r || {})));
+const countBuf = (b) => Object.values(b).reduce((n, a) => n + a.length, 0);
+
+let collecting = false;
 
 async function api(path, method, body) {
   const t = await getToken();
@@ -34,20 +34,25 @@ async function api(path, method, body) {
   return fetch(BASE + path, { method: method || "GET", headers, body: body || undefined, credentials: "include" });
 }
 
-async function harvestInPage() {
-  setStatus("Старт… читаю регіони");
+async function scan() {
+  collecting = true;
+  setStatus("▶️ Старт… читаю регіони");
   let res;
   try { res = await api("/api/dictionaries/location/regions", "GET"); }
-  catch (e) { setStatus("Помилка мережі: " + e); return; }
-  if (res.status === 401) { setStatus("⛔ 401 — зроби 1 пошук на цій сторінці (щоб зловити токен), потім тисни кнопку знову"); return; }
-  if (!res.ok) { setStatus("Помилка регіонів: HTTP " + res.status); return; }
+  catch (e) { setStatus("Помилка мережі: " + e); collecting = false; return; }
+  if (res.status === 401) { setStatus("⛔ 401 — зроби 1 пошук на цій сторінці, потім «Старт» знову"); collecting = false; return; }
+  if (!res.ok) { setStatus("Помилка регіонів: HTTP " + res.status); collecting = false; return; }
   const regions = await res.json();
-  let done = 0, grand = 0; const total = regions.length * TYPE_GROUPS.length;
+  const buffer = await loadBuffer();
+  let done = 0; const total = regions.length * TYPE_GROUPS.length;
   for (const reg of regions) {
+    if (!collecting) { setStatus("⏹ Зупинено. Зібрано " + countBuf(buffer) + ". Натисни «Відправити»."); return; }
     const rname = titleUA(reg.name);
     for (const g of TYPE_GROUPS) {
+      if (!collecting) { setStatus("⏹ Зупинено. Зібрано " + countBuf(buffer) + "."); return; }
       const rows = [], seen = new Set(); let ok = false;
       for (const num of NUMS) {
+        if (!collecting) break;
         try {
           const r = await api("/api/plate/reserve", "POST", JSON.stringify({ reg: String(reg.id), type: g.codes, num }));
           if (r.ok) {
@@ -67,22 +72,38 @@ async function harvestInPage() {
       }
       done++;
       if (ok) {
-        const resp = await pushScope(rname, g.label, rows);
-        grand += rows.length;
-        setStatus(`📤 ${rname}/${g.label}: ${rows.length} → сервер ${resp.status}. Всього ${grand} · ${done}/${total}`);
-      } else {
-        setStatus(`• ${rname}/${g.label}: скоуп не вдався. ${done}/${total}`);
+        buffer[rname + "|||" + g.label] = rows;
+        await saveBuffer(buffer);
+        setStatus(`🔎 Зібрано ${countBuf(buffer)} · ${done}/${total} (${rname}/${g.label})`);
       }
     }
   }
-  setStatus(`✅ Готово. Надіслано ~${grand} номерів на сервер.`);
+  collecting = false;
+  setStatus(`✅ Скан завершено. Зібрано ${countBuf(buffer)}. Тисни «Відправити на сервер».`);
 }
 
-let running = false;
-chrome.runtime.onMessage.addListener((msg, sender, reply) => {
-  if (msg && msg.type === "harvestInPage") {
-    if (!running) { running = true; harvestInPage().catch((e) => setStatus("Помилка: " + e)).finally(() => running = false); }
-    reply && reply({ started: true });
+async function sendAll() {
+  const buffer = await loadBuffer();
+  const keys = Object.keys(buffer);
+  if (!keys.length) { setStatus("Немає зібраного. Спершу «Старт»."); return; }
+  let sent = 0, i = 0;
+  for (const k of keys) {
+    const idx = k.indexOf("|||");
+    const rname = k.slice(0, idx), label = k.slice(idx + 3);
+    const resp = await pushScope(rname, label, buffer[k]);
+    sent += buffer[k].length; i++;
+    setStatus(`📤 Відправляю ${sent} (${i}/${keys.length}) · сервер ${resp.status}`);
+    await sleep(150);
   }
+  setStatus(`✅ Відправлено ${sent} номерів на сервер.`);
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (!msg) return false;
+  if (msg.type === "start") { if (!collecting) scan().catch((e) => setStatus("Помилка: " + e)); }
+  else if (msg.type === "stop") { collecting = false; setStatus("⏹ Зупиняю…"); }
+  else if (msg.type === "send") { sendAll().catch((e) => setStatus("Помилка відправки: " + e)); }
+  else if (msg.type === "clear") { chrome.storage.local.set({ buffer: {} }, () => setStatus("🗑 Буфер очищено.")); }
+  reply && reply({ ok: true });
   return false;
 });

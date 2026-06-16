@@ -1,13 +1,16 @@
 <!doctype html><html lang="uk"><head><meta charset="utf-8">
 <style>
-body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:320px;padding:14px;background:#0f1115;color:#eef1f6}
-h3{margin:0 0 6px}button{display:block;width:100%;margin:8px 0;padding:12px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;background:#3b82f6;color:#fff}
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:330px;padding:14px;background:#0f1115;color:#eef1f6}
+h3{margin:0 0 6px}small{color:#9aa4b2}
+.row{display:flex;gap:8px}
+button{flex:1;margin:8px 0;padding:11px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;color:#fff}
+#start{background:#16a34a}#stop{background:#b91c1c}#send{background:#3b82f6}#clear{background:#374151}
 #status{margin-top:10px;padding:10px;background:#1b1f27;border-radius:8px;font-size:13px;white-space:pre-wrap;min-height:34px}
-small{color:#9aa4b2}
 </style></head><body>
 <h3>🚗 Автономера — збирач</h3>
-<small>1) Залогінься на e-driver.mvs.gov.ua → відкрий «Бронювання НЗ». 2) Натисни кнопку.</small>
-<button id="go">🔄 Зібрати базу і надіслати на сервер</button>
+<small>Залогінься на e-driver.mvs.gov.ua, відкрий «Бронювання НЗ» (1 пошук). Тоді:</small>
+<div class="row"><button id="start">▶️ Старт</button><button id="stop">⏹ Стоп</button></div>
+<div class="row"><button id="send">📤 Відправити</button><button id="clear">🗑 Очистити</button></div>
 <div id="status">—</div>
 <script src="popup.js"></script>
 </body></html>
