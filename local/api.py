@@ -226,6 +226,7 @@ async def stage(request: Request) -> dict:
         await db.set_meta("stage_ts", dt.datetime.now(dt.timezone.utc).isoformat())
         await db.set_meta("stage_pending", "1")
         await db.set_meta("stage_count", str(total))
+        await db.set_meta("stage_scopes", _json.dumps(body.get("scopes") or []))
         if config.BOT_TOKEN and config.ADMIN_CHAT_ID:
             from aiogram import Bot
             from aiogram.client.default import DefaultBotProperties

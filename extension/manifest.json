@@ -1,14 +1,47 @@
 {
   "manifest_version": 3,
   "name": "Автономера — авто-збирач (e-driver)",
-  "version": "8.0",
+  "version": "8.1",
   "description": "Кожні 3 год делікатно (≤9/хв) збирає номери з e-driver і шле у чергу на сервер (адмін підтверджує оновлення).",
-  "permissions": ["storage", "unlimitedStorage", "alarms", "tabs"],
-  "host_permissions": ["*://*.gov.ua/*", "https://34.123.136.171.nip.io/*"],
-  "background": { "service_worker": "background.js" },
-  "content_scripts": [
-    { "matches": ["*://*.gov.ua/*"], "js": ["inject.js"], "run_at": "document_start", "world": "MAIN", "all_frames": true },
-    { "matches": ["*://*.gov.ua/*"], "js": ["content.js"], "run_at": "document_start", "world": "ISOLATED", "all_frames": true }
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "tabs"
   ],
-  "action": { "default_popup": "popup.html", "default_title": "Автономера — авто-збирач" }
+  "host_permissions": [
+    "*://*.gov.ua/*",
+    "https://34.123.136.171.nip.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.gov.ua/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.gov.ua/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Автономера — авто-збирач"
+  }
 }

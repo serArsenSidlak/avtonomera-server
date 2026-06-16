@@ -20,7 +20,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   if (msg.type === "stage") {
     fetch(SERVER + "/stage", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ secret: INGEST_SECRET, rows: msg.rows || [], reset: !!msg.reset, done: !!msg.done }),
+      body: JSON.stringify({ secret: INGEST_SECRET, rows: msg.rows || [], reset: !!msg.reset, done: !!msg.done, scopes: msg.scopes || [] }),
     }).then((r) => reply({ status: r.status })).catch((e) => reply({ status: "err:" + e }));
     return true;
   }

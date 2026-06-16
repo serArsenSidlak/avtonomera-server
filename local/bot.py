@@ -1986,7 +1986,7 @@ async def _commit_task(bot: Bot, chat_id: int) -> None:
         await bot.send_message(
             chat_id,
             f"✅ Базу оновлено з черги.\n📊 Оброблено: {res['processed']}\n🆕 Нових: {res['new']}\n"
-            f"📨 Сповіщень: {res['notified']}",
+            f"❌ Зникло: {res.get('removed', 0)}\n📨 Сповіщень: {res['notified']}",
             reply_markup=kb_back([("🛠 Адмінка", "admin")]),
         )
     except Exception as exc:  # noqa: BLE001
@@ -2212,7 +2212,8 @@ async def _auto_commit_loop(bot: Bot) -> None:
                     await bot.send_message(
                         config.ADMIN_CHAT_ID,
                         f"♻️ <b>Авто-оновлення бази</b> (минуло {config.STAGE_AUTOCOMMIT_HOURS} год без ручного):\n"
-                        f"оброблено {res['processed']}, нових {res['new']}, сповіщень {res['notified']}.",
+                        f"оброблено {res['processed']}, нових {res['new']}, зникло {res.get('removed', 0)}, "
+                        f"сповіщень {res['notified']}.",
                     )
         except Exception as exc:  # noqa: BLE001
             print(f"[autocommit] {exc!r}")

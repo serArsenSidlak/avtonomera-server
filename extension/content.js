@@ -15,7 +15,7 @@ function titleUA(s) { return (s || "").toLowerCase().replace(/(^|[\s\-.])([a-zа
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const getToken = () => new Promise((r) => chrome.storage.local.get({ authToken: null }, (d) => r(d.authToken)));
 const setStatus = (s) => chrome.storage.local.set({ status: s, statusTs: Date.now() });
-const stage = (rows, reset, done) => new Promise((res) => chrome.runtime.sendMessage({ type: "stage", rows, reset, done }, (r) => res(r || {})));
+const stage = (rows, reset, done, scopes) => new Promise((res) => chrome.runtime.sendMessage({ type: "stage", rows, reset, done, scopes }, (r) => res(r || {})));
 
 let busy = false;
 async function api(path, method, body) {
@@ -36,7 +36,7 @@ async function harvest() {
     if (!res.ok) { setStatus("Регіони HTTP " + res.status); return; }
     const regions = await res.json();
     await stage([], true, false); // reset the queue → fresh snapshot
-    let done = 0, grand = 0; const total = regions.length * TYPE_GROUPS.length;
+    let done = 0, grand = 0; const okScopes = []; const total = regions.length * TYPE_GROUPS.length;
     for (const reg of regions) {
       const rname = titleUA(reg.name);
       for (const g of TYPE_GROUPS) {
@@ -44,6 +44,7 @@ async function harvest() {
           const r = await api("/api/plate/reserve", "POST", JSON.stringify({ reg: String(reg.id), type: g.codes, num: "" }));
           if (r.ok) {
             const arr = await r.json();
+            okScopes.push([rname, g.label]);  // count even empty scopes for accurate removals
             const rows = (Array.isArray(arr) ? arr : []).map((p) => ({
               plate_number: p.plate, region: rname, tsc: p.depName || null,
               vehicle_type: g.label, price: p.cost ? parseFloat(p.cost) : null,
@@ -56,7 +57,7 @@ async function harvest() {
         await sleep(REQ_GAP_MS + Math.random() * 1500);
       }
     }
-    await stage([], false, true); // done → server marks pending + notifies admin
+    await stage([], false, true, okScopes); // done → server marks pending + notifies admin
     setStatus(`✅ Зібрано ${grand}. Надіслано в чергу — адмін підтвердить у боті.`);
   } finally { busy = false; }
 }

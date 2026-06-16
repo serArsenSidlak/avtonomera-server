@@ -97,7 +97,12 @@ async def apply_table(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 async def commit_staging() -> Dict[str, Any]:
-    """Apply the staged rows (from /stage) to the DB, then clear the queue."""
+    """Apply the staged FULL snapshot to the DB (scope-safe removals included), then clear it.
+
+    The extension collects every region×type comprehensively, so the queue is a complete
+    snapshot → we use apply_scan with the collected ok_scopes, which also marks genuinely
+    disappeared plates as removed (within successfully-collected scopes only).
+    """
     import json
 
     rows: List[Dict[str, Any]] = []
@@ -112,7 +117,17 @@ async def commit_staging() -> Dict[str, Any]:
                         pass
     except FileNotFoundError:
         rows = []
-    res = await apply_table(rows) if rows else {"processed": 0, "new_ids": []}
+    raw_scopes = await db.get_meta("stage_scopes")
+    ok_scopes = set()
+    if raw_scopes:
+        try:
+            ok_scopes = {(s[0], s[1]) for s in json.loads(raw_scopes)}
+        except ValueError:
+            ok_scopes = set()
+    if not ok_scopes:
+        # Fallback: derive scopes from the rows themselves (misses zero-result scopes).
+        ok_scopes = {(r.get("region"), r.get("vehicle_type")) for r in rows}
+    res = await apply_scan(rows, ok_scopes) if rows else {"scraped": 0, "new_ids": [], "removed": 0}
     notified = await notify_new(res["new_ids"]) if rows else 0
     try:
         open(config.STAGE_PATH, "w", encoding="utf-8").close()
@@ -120,7 +135,9 @@ async def commit_staging() -> Dict[str, Any]:
         pass
     await db.set_meta("stage_pending", "0")
     await db.set_meta("stage_count", "0")
-    return {"processed": res["processed"], "new": len(res["new_ids"]), "notified": notified}
+    await db.set_meta("stage_scopes", "")
+    return {"processed": res.get("scraped", 0), "new": len(res["new_ids"]),
+            "removed": res.get("removed", 0), "notified": notified}
 
 
 def parse_table_csv(text: str) -> List[Dict[str, Any]]:
