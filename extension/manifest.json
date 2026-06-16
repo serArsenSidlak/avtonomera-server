@@ -1,14 +1,46 @@
 {
   "manifest_version": 3,
   "name": "Автономера — збирач номерів (e-driver)",
-  "version": "2.0",
+  "version": "3.0",
   "description": "Збирає доступні номерні знаки через API e-driver.mvs.gov.ua у твоїй сесії і шле на сервер Автономера.",
-  "permissions": ["storage", "unlimitedStorage"],
-  "host_permissions": ["*://*.gov.ua/*", "https://34.123.136.171.nip.io/*"],
-  "background": { "service_worker": "background.js" },
-  "content_scripts": [
-    { "matches": ["*://*.gov.ua/*"], "js": ["inject.js"], "run_at": "document_start", "world": "MAIN", "all_frames": true },
-    { "matches": ["*://*.gov.ua/*"], "js": ["content.js"], "run_at": "document_start", "world": "ISOLATED", "all_frames": true }
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs"
   ],
-  "action": { "default_popup": "popup.html", "default_title": "Автономера — збирач" }
+  "host_permissions": [
+    "*://*.gov.ua/*",
+    "https://34.123.136.171.nip.io/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.gov.ua/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": [
+        "*://*.gov.ua/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_start",
+      "world": "ISOLATED",
+      "all_frames": true
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Автономера — збирач"
+  }
 }
