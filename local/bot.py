@@ -66,6 +66,7 @@ class Flow(StatesGroup):
     admin_broadcast = State()
     admin_vip_user = State()
     admin_vip_days = State()
+    admin_csv = State()
 
 
 @dp.callback_query.middleware
@@ -1488,11 +1489,12 @@ async def render_admin(bot: Bot, chat_id: int) -> None:
     b.button(text="🤖 Боти", callback_data="a_bots")
     b.button(text="📣 Розсилка", callback_data="a_bcast")
     b.button(text="📢 Оживити чати", callback_data="a_refresh")
+    b.button(text="📥 Імпорт CSV", callback_data="a_import")
     b.button(text="🐞 Звіти про помилки", callback_data="a_reports")
     if _is_super(chat_id):
         b.button(text="👮 Адміни", callback_data="a_admins")
     b.button(text="⬅️ Меню", callback_data="menu")
-    b.adjust(2, 2, 2, 2, 2, 1)
+    b.adjust(2, 2, 2, 2, 2, 2, 1)
     role = "супер-адмін" if _is_super(chat_id) else "адмін"
     await show(bot, chat_id, f"🛠 <b>Адмін-панель</b> ({role})", b.as_markup())
 
@@ -1973,6 +1975,65 @@ async def cb_rst(cq: CallbackQuery) -> None:
     await show(cq.message.bot, cq.message.chat.id, "\n".join(lines),
                kb_back([("🅿️ Парсер", "a_scan"), ("🛠 Адмінка", "admin")]))
     await cq.answer()
+
+
+@dp.callback_query(F.data == "a_import")
+async def cb_a_import(cq: CallbackQuery, state: FSMContext) -> None:
+    """Prompt the admin to upload a CSV table (alternative DB-update method)."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    await state.set_state(Flow.admin_csv)
+    await show(
+        cq.message.bot, cq.message.chat.id,
+        "📥 <b>Імпорт таблиці (CSV)</b>\n\nНадішли CSV-файл (з розширення «Автономера — таблиця»): "
+        "стовпці Номер;Ціна;Сервісний центр;Регіон;Тип ТЗ.\n\n"
+        "Оновлю базу: додам нові, оновлю наявні, нові потраплять у стрічку та сповіщення. "
+        "<i>Зникнення старих при ручному імпорті НЕ враховується.</i>",
+        kb_back([("🛠 Адмінка", "admin")]),
+    )
+    await cq.answer()
+
+
+async def _process_csv_task(bot: Bot, chat_id: int, text: str) -> None:
+    """Parse an uploaded CSV table and apply it to the DB (background)."""
+    from local.persist import apply_table, notify_new, parse_table_csv
+    try:
+        rows = parse_table_csv(text)
+        if not rows:
+            await bot.send_message(chat_id, "⚠️ У файлі не знайдено рядків. Перевір формат (Номер;Ціна;ТСЦ;Регіон;Тип).")
+            return
+        await bot.send_message(chat_id, f"⏳ Обробляю {len(rows)} рядків… (може зайняти 1–3 хв)")
+        res = await apply_table(rows)
+        notified = await notify_new(res["new_ids"])
+        await bot.send_message(
+            chat_id,
+            f"✅ Імпорт завершено.\n📊 Оброблено: {res['processed']}\n🆕 Нових: {len(res['new_ids'])}\n"
+            f"📨 Сповіщень: {notified}",
+            reply_markup=kb_back([("🛠 Адмінка", "admin")]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        await bot.send_message(chat_id, f"❌ Помилка імпорту: {exc!r}")
+
+
+@dp.message(Flow.admin_csv, F.document)
+async def do_csv_import(message: Message, state: FSMContext) -> None:
+    """Receive the CSV document from an admin and import it."""
+    if not await db.is_admin(message.chat.id):
+        return
+    await state.clear()
+    doc = message.document
+    try:
+        f = await message.bot.get_file(doc.file_id)
+        buf = await message.bot.download_file(f.file_path)
+        raw = buf.read() if hasattr(buf, "read") else buf
+        text = raw.decode("utf-8-sig", errors="replace")
+    except Exception as exc:  # noqa: BLE001
+        await message.answer(f"❌ Не вдалося завантажити файл: {exc!r}")
+        return
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    asyncio.create_task(_process_csv_task(message.bot, message.chat.id, text))
+    await show(message.bot, message.chat.id, "📥 Файл отримано, обробляю у фоні…",
+               kb_back([("🛠 Адмінка", "admin")]))
 
 
 @dp.callback_query(F.data == "a_reports")

@@ -66,6 +66,66 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
     return {"scraped": len(rows), "new_ids": new_ids, "removed": removed}
 
 
+async def apply_table(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Manual-import variant: upsert rows + track NEW plates, but NEVER mark removed.
+
+    Used for CSV tables uploaded from the admin panel (e.g. the browser-extension export).
+    Disappearance is intentionally ignored for the manual method (partial coverage), so we
+    only refresh/insert and emit 'new' feed events + notifications.
+    """
+    await db.init_db()
+    seeded = (await db.get_meta("seeded")) == "1"
+    new_ids: List[int] = []
+    async with db.acquire() as conn:
+        seen_tsc: set = set()
+        for r in rows:
+            pid, is_new = await db.upsert_plate(
+                conn, r["plate_number"], r["region"], r.get("tsc"), r.get("vehicle_type"), r.get("price")
+            )
+            if r.get("tsc") and r["tsc"] not in seen_tsc:
+                await db.upsert_tsc_region(conn, r["tsc"], r["region"])
+                seen_tsc.add(r["tsc"])
+            if is_new:
+                new_ids.append(pid)
+                if seeded:
+                    await db.log_feed_event(conn, r["plate_number"], r["region"], r.get("vehicle_type"), "new")
+    if not seeded:
+        await db.set_meta("seeded", "1")
+    import datetime as dt
+    await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    return {"processed": len(rows), "new_ids": new_ids}
+
+
+def parse_table_csv(text: str) -> List[Dict[str, Any]]:
+    """Parse the extension's CSV (Номер;Ціна;Сервісний центр;Регіон;Тип ТЗ) into row dicts."""
+    import csv
+    import io
+
+    text = text.lstrip("﻿")
+    # Auto-detect delimiter (the extension uses ';', but be tolerant of ',').
+    delim = ";" if text[:200].count(";") >= text[:200].count(",") else ","
+    reader = csv.reader(io.StringIO(text), delimiter=delim)
+    rows: List[Dict[str, Any]] = []
+    for i, rec in enumerate(reader):
+        if not rec or len(rec) < 5:
+            continue
+        plate = (rec[0] or "").strip()
+        if not plate or plate.lower() in ("номер", "plate"):  # skip header
+            continue
+        price = None
+        try:
+            price = float(str(rec[1]).replace(",", ".").strip()) if rec[1].strip() else None
+        except ValueError:
+            price = None
+        rows.append({
+            "plate_number": plate, "price": price,
+            "tsc": (rec[2] or "").strip() or None,
+            "region": (rec[3] or "").strip() or "—",
+            "vehicle_type": (rec[4] or "").strip() or None,
+        })
+    return rows
+
+
 async def notify_new(new_ids: List[int]) -> int:
     """Match new plates against active hunts and send Telegram notifications."""
     if not config.BOT_TOKEN or not new_ids:
