@@ -1807,77 +1807,57 @@ async def cb_a_scan(cq: CallbackQuery) -> None:
     b.button(text="🛠 Адмінка", callback_data="admin")
     b.adjust(1)
     await show(cq.message.bot, cq.message.chat.id,
-              "🕷 <b>Запуск парсера</b>\n⚠️ Відкриється браузер, скан може тривати довго.",
+              "🕷 <b>Запуск парсера</b>\nЗапит піде у чергу; парсер виконається на Маку "
+              "(residential IP), звіт прийде сюди. Скан може тривати довго.",
               b.as_markup())
     await cq.answer()
 
 
-_last_fail_scopes: Dict[int, list] = {}
+async def _queue_scan(bot: Bot, chat_id: int, regions=None, only_scopes=None) -> None:
+    """Queue a scrape request for the Mac-side worker (the server has no scraper/Playwright).
 
-
-async def _run_scan_task(bot: Bot, chat_id: int, regions, only_scopes=None) -> None:
-    """Background task: run a scrape cycle and report a detailed result to the admin."""
-    try:
-        from local.run_scrape import run_once
-        scope = "повтор невдалих" if only_scopes else ("усі регіони" if not regions else ", ".join(regions))
-        await bot.send_message(chat_id, f"🕷 Скан запущено ({scope})… Це може зайняти час.")
-        s = await run_once(regions=regions, only_scopes=only_scopes)
-        fails = s.get("fail_scopes", [])
-        _last_fail_scopes[chat_id] = fails
-        by_type = s.get("by_type", {})
-        by_region = s.get("by_region", {})
-        lines = [
-            f"✅ Скан завершено ({scope})",
-            f"🚗 Знайдено: {s['scraped']} · 🆕 нових: {s['new']} · ❌ зникло: {s['removed']}",
-            f"📨 Сповіщень: {s['notified']} · ✅ скоупів ок: {s['ok_scopes']} · ⚠️ невдалих: {len(fails)}",
-        ]
-        if by_type:
-            lines.append("\n<b>За типом ТЗ:</b>")
-            for t, c in sorted(by_type.items(), key=lambda x: -x[1]):
-                lines.append(f"  • {t}: {c}")
-        if by_region:
-            top = sorted(by_region.items(), key=lambda x: -x[1])[:8]
-            lines.append("\n<b>Топ регіонів:</b>")
-            for r, c in top:
-                lines.append(f"  • {r}: {c}")
-        if fails:
-            lines.append(f"\n⚠️ <b>Невдалі ({len(fails)})</b> — НЕ позначені як зниклі:")
-            for (rg, tp) in fails[:15]:
-                lines.append(f"  • {rg} / {tp}")
-            if len(fails) > 15:
-                lines.append(f"  …ще {len(fails) - 15}")
-        b = InlineKeyboardBuilder()
-        if fails:
-            b.button(text=f"🔁 Повторити невдалі ({len(fails)})", callback_data="scan_retry")
-        b.button(text="🛠 Адмінка", callback_data="admin")
-        b.adjust(1)
-        await bot.send_message(chat_id, "\n".join(lines), reply_markup=b.as_markup())
-    except Exception as exc:  # noqa: BLE001
-        await bot.send_message(chat_id, f"❌ Помилка скану: {exc!r}")
+    Akamai needs a residential IP, so the server only RECORDS the request in the DB; the
+    `local.scan_worker` process on the Mac picks it up, scrapes, writes to the shared Supabase
+    DB, reports the result here and clears the flag. Manual-trigger by design.
+    """
+    import datetime as _dt
+    import json
+    req = {
+        "chat_id": chat_id,
+        "regions": list(regions) if regions else None,
+        "only_scopes": [list(s) for s in only_scopes] if only_scopes else None,
+        "ts": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+    }
+    await db.set_meta("scan_request", json.dumps(req))
+    scope = "повтор невдалих" if only_scopes else ("усі регіони" if not regions else ", ".join(regions))
+    await show(bot, chat_id,
+              f"🕷 Запит на скан (<b>{scope}</b>) поставлено в чергу.\n"
+              "Парсер на Маку (residential) виконає його найближчим часом — звіт прийде сюди.",
+              kb_back([("🛠 Адмінка", "admin")]))
 
 
 @dp.callback_query(F.data == "scan_retry")
 async def cb_scan_retry(cq: CallbackQuery) -> None:
-    """Re-scan only the previously failed (region, type) scopes."""
+    """Queue a re-scan of only the previously failed (region, type) scopes (from DB meta)."""
     if not await db.is_admin(cq.message.chat.id):
         return
-    fails = _last_fail_scopes.get(cq.message.chat.id) or []
+    import json
+    raw = await db.get_meta("last_fail_scopes")
+    fails = json.loads(raw) if raw else []
     if not fails:
         await cq.answer("Немає невдалих", show_alert=True)
         return
-    await cq.answer("Повторюю…")
-    asyncio.create_task(_run_scan_task(cq.message.bot, cq.message.chat.id, None, only_scopes=set(map(tuple, fails))))
+    await cq.answer("Ставлю в чергу…")
+    await _queue_scan(cq.message.bot, cq.message.chat.id, None, only_scopes=[tuple(x) for x in fails])
 
 
 @dp.callback_query(F.data == "a_scan_all")
 async def cb_a_scan_all(cq: CallbackQuery) -> None:
-    """Launch a full scan in the background."""
+    """Queue a full scan (executed by the Mac worker)."""
     if not await db.is_admin(cq.message.chat.id):
         return
-    asyncio.create_task(_run_scan_task(cq.message.bot, cq.message.chat.id, None))
-    await show(cq.message.bot, cq.message.chat.id,
-              "🕷 Повний скан запущено у фоні. Звіт прийде сюди.", kb_back([("🛠 Адмінка", "admin")]))
-    await cq.answer("Запущено")
+    await _queue_scan(cq.message.bot, cq.message.chat.id, None)
+    await cq.answer("Поставлено в чергу")
 
 
 @dp.callback_query(F.data == "a_scan_region")
@@ -1896,14 +1876,12 @@ async def cb_a_scan_region(cq: CallbackQuery) -> None:
 
 @dp.callback_query(F.data.startswith("a_scanr:"))
 async def cb_a_scanr(cq: CallbackQuery) -> None:
-    """Launch a single-region scan."""
+    """Queue a single-region scan (executed by the Mac worker)."""
     if not await db.is_admin(cq.message.chat.id):
         return
     region = cq.data.split(":", 1)[1]
-    asyncio.create_task(_run_scan_task(cq.message.bot, cq.message.chat.id, {region}))
-    await show(cq.message.bot, cq.message.chat.id,
-              f"🕷 Скан регіону «{region}» запущено у фоні.", kb_back([("🛠 Адмінка", "admin")]))
-    await cq.answer("Запущено")
+    await _queue_scan(cq.message.bot, cq.message.chat.id, {region})
+    await cq.answer("Поставлено в чергу")
 
 
 @dp.callback_query(F.data == "a_reports")
