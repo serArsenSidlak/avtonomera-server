@@ -55,6 +55,52 @@ BOT_USERNAME = "nomer_na_avto_bot"
 
 STEP_ORDER = ["type", "region", "series", "price", "combo"]
 
+# Official region letter-pairs (Додаток 4 до Вимог до НЗ, МВС) — Cyrillic. These are ALL the
+# series a region can have, so a user can monitor a series even before any plate is available.
+REGION_SERIES: dict = {
+    "АР Крим": ["АК", "МА", "ТК", "МК"],
+    "Вінницька": ["АВ", "КВ", "ІМ", "РІ"],
+    "Волинська": ["АС", "КС", "СМ", "ТС"],
+    "Дніпропетровська": ["АЕ", "КЕ", "РР", "МІ"],
+    "Донецька": ["АН", "КН", "ТН", "МН"],
+    "Житомирська": ["АМ", "КМ", "ТМ", "МВ"],
+    "Закарпатська": ["АО", "КО", "МТ", "МО"],
+    "Запорізька": ["АР", "КР", "ТР", "МР"],
+    "Івано-Франківська": ["АТ", "КТ", "ТО", "ХС"],
+    "Київська": ["АІ", "КІ", "ТІ", "ЕЕ"],
+    "м. Київ": ["АА", "КА", "ТТ", "КК"],
+    "Кіровоградська": ["ВА", "НА", "ХА", "ЕА"],
+    "Луганська": ["ВВ", "НВ", "ЕР", "ЕВ"],
+    "Львівська": ["ВС", "НС", "СС", "ЕС"],
+    "Миколаївська": ["ВЕ", "НЕ", "ХЕ", "ХН"],
+    "Одеська": ["ВН", "НН", "ОО", "ЕН"],
+    "Полтавська": ["ВІ", "НІ", "ХІ", "ЕІ"],
+    "Рівненська": ["ВК", "НК", "ХК", "ЕК"],
+    "Сумська": ["ВМ", "НМ", "ХМ", "ЕМ"],
+    "Тернопільська": ["ВО", "НО", "ХО", "ЕО"],
+    "Харківська": ["АХ", "КХ", "ХХ", "ЕХ"],
+    "Херсонська": ["ВТ", "НТ", "ХТ", "ЕТ"],
+    "Хмельницька": ["ВХ", "НХ", "ОХ", "РХ"],
+    "Черкаська": ["СА", "ІА", "ОА", "РА"],
+    "Чернігівська": ["СВ", "ІВ", "ОВ", "РВ"],
+    "Чернівецька": ["СЕ", "ІЕ", "ОЕ", "РЕ"],
+    "м. Севастополь": ["СН", "ІН", "ОН", "РН"],
+}
+
+
+def _region_series(region: Optional[str]) -> list:
+    """Official series pairs for a region name (tolerant of 'Київ'/'м. Київ' variants)."""
+    if not region:
+        return []
+    if region in REGION_SERIES:
+        return REGION_SERIES[region]
+    r = region.replace("м.", "").replace("область", "").strip()
+    for k, v in REGION_SERIES.items():
+        kk = k.replace("м.", "").replace("область", "").strip()
+        if kk == r or kk.startswith(r) or r.startswith(kk):
+            return v
+    return []
+
 
 class Flow(StatesGroup):
     """Conversation states for steps that need free-text input."""
@@ -875,19 +921,27 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         await show(bot, chat_id, head + note, b.as_markup())
 
     elif step == "series":
-        if not f.get("region"):  # series are region-specific → skip this step for "all regions"
+        region = f.get("region")
+        if not region:  # series are region-specific → skip this step for "all regions"
             await render_step(bot, chat_id, state, "price")
             return
-        series = await db.distinct_series(region=f.get("region"), vehicle_type=f.get("vtype"))
+        available = set(await db.distinct_series(region=region, vehicle_type=f.get("vtype")))
+        official = _region_series(region)
+        # All official series for the region first, then any extra available ones not in the list.
+        ordered = official + [s for s in sorted(available) if s not in official]
+        if not ordered:
+            ordered = sorted(available)
         b.button(text="✅ Без фільтру по серії", callback_data="sets:__all__")
-        for s in series:
-            b.button(text=s, callback_data=f"sets:{s}")
+        for s in ordered:
+            mark = "" if s in available else " 🔔"  # 🔔 = немає зараз → лише моніторинг
+            b.button(text=f"{s}{mark}", callback_data=f"sets:{s}")
         b.button(text="⬅️ Назад", callback_data="step:region")
         b.button(text="➡️ Далі", callback_data="sets:__all__")
         b.button(text="⬅️ Меню", callback_data="menu")
-        rows = [1] + [3] * ((len(series) + 2) // 3) + [2, 1]
+        rows = [1] + [3] * ((len(ordered) + 2) // 3) + [2, 1]
         b.adjust(*rows)
-        note = "🔤 Обери <b>серію</b> (літери):" if series else "🔤 Серій не знайдено"
+        note = ("🔤 Обери <b>серію</b> регіону (🔔 — поки немає в продажу, можна поставити моніторинг):"
+                if ordered else "🔤 Серій не знайдено")
         await show(bot, chat_id, head + note, b.as_markup())
 
     elif step == "combo":
