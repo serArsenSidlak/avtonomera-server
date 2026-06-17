@@ -31,38 +31,45 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
 
     Returns a summary dict including the list of new plate ids (for notifications).
     """
+    import datetime as dt
+
     await db.init_db()
     seeded = (await db.get_meta("seeded")) == "1"
     new_ids: List[int] = []
     seen_by_scope: Dict[Tuple[str, Any], List[int]] = defaultdict(list)
     removed = 0
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
 
     async with db.acquire() as conn:
+        # Batched upsert (few round trips instead of one per row).
+        upserted = await db.bulk_upsert_plates(conn, rows, now)
+        new_events: List[tuple] = []
+        for u in upserted:
+            seen_by_scope[(u["region"], u["vehicle_type"])].append(u["id"])
+            if u["inserted"]:
+                new_ids.append(u["id"])
+                if seeded:
+                    new_events.append((u["plate_number"], u["region"], u["vehicle_type"], "new"))
+        # TSC → region (once per distinct TSC).
         seen_tsc: set = set()
         for r in rows:
-            pid, is_new = await db.upsert_plate(
-                conn, r["plate_number"], r["region"], r.get("tsc"), r.get("vehicle_type"), r.get("price")
-            )
-            seen_by_scope[(r["region"], r.get("vehicle_type"))].append(pid)
             if r.get("tsc") and r["tsc"] not in seen_tsc:
                 await db.upsert_tsc_region(conn, r["tsc"], r["region"])
                 seen_tsc.add(r["tsc"])
-            if is_new:
-                new_ids.append(pid)
-                if seeded:
-                    await db.log_feed_event(conn, r["plate_number"], r["region"], r.get("vehicle_type"), "new")
+        # Scope-safe removals.
+        removed_events: List[tuple] = []
         for (region, vtype) in ok_scopes:
             ids = seen_by_scope.get((region, vtype), [])
             removed_rows = await db.mark_removed(conn, region, vtype, ids)
             removed += len(removed_rows)
             for rr in removed_rows:
-                await db.log_feed_event(conn, rr["plate_number"], rr["region"], rr.get("vehicle_type"), "removed")
+                removed_events.append((rr["plate_number"], rr["region"], rr.get("vehicle_type"), "removed"))
+        await db.log_feed_events_bulk(conn, new_events + removed_events)
         await db.reconcile_removed(conn)
 
     if not seeded:
         await db.set_meta("seeded", "1")
-    import datetime as dt
-    await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    await db.set_meta("last_scan", now)
     db.invalidate_cache()
     return {"scraped": len(rows), "new_ids": new_ids, "removed": removed}
 
@@ -74,26 +81,29 @@ async def apply_table(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     Disappearance is intentionally ignored for the manual method (partial coverage), so we
     only refresh/insert and emit 'new' feed events + notifications.
     """
+    import datetime as dt
+
     await db.init_db()
     seeded = (await db.get_meta("seeded")) == "1"
     new_ids: List[int] = []
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
     async with db.acquire() as conn:
+        upserted = await db.bulk_upsert_plates(conn, rows, now)
+        new_events: List[tuple] = []
         seen_tsc: set = set()
+        for u in upserted:
+            if u["inserted"]:
+                new_ids.append(u["id"])
+                if seeded:
+                    new_events.append((u["plate_number"], u["region"], u["vehicle_type"], "new"))
         for r in rows:
-            pid, is_new = await db.upsert_plate(
-                conn, r["plate_number"], r["region"], r.get("tsc"), r.get("vehicle_type"), r.get("price")
-            )
             if r.get("tsc") and r["tsc"] not in seen_tsc:
                 await db.upsert_tsc_region(conn, r["tsc"], r["region"])
                 seen_tsc.add(r["tsc"])
-            if is_new:
-                new_ids.append(pid)
-                if seeded:
-                    await db.log_feed_event(conn, r["plate_number"], r["region"], r.get("vehicle_type"), "new")
+        await db.log_feed_events_bulk(conn, new_events)
     if not seeded:
         await db.set_meta("seeded", "1")
-    import datetime as dt
-    await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    await db.set_meta("last_scan", now)
     db.invalidate_cache()
     return {"processed": len(rows), "new_ids": new_ids}
 

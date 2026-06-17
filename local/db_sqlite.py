@@ -221,6 +221,18 @@ async def upsert_plate(
     return plate_id, not bool(was_available)
 
 
+async def bulk_upsert_plates(db: aiosqlite.Connection, rows: List[Dict[str, Any]], now: str = None) -> List[Dict[str, Any]]:
+    """Loop upsert for SQLite (local file is fast); same return shape as the Postgres batch."""
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        pid, is_new = await upsert_plate(
+            db, r["plate_number"], r["region"], r.get("tsc"), r.get("vehicle_type"), r.get("price")
+        )
+        out.append({"id": pid, "plate_number": parse_plate(r["plate_number"])["plate_number"],
+                    "region": r["region"], "vehicle_type": r.get("vehicle_type"), "inserted": is_new})
+    return out
+
+
 async def mark_removed(
     db: aiosqlite.Connection, region: str, vehicle_type: Optional[str], seen_ids: List[int]
 ) -> List[Dict[str, Any]]:
@@ -273,6 +285,17 @@ async def log_feed_event(
         "INSERT INTO feed_events (plate_number, region, vehicle_type, event, created_at) "
         "VALUES (?,?,?,?,?)",
         (plate_number, region, vehicle_type, event, _now()),
+    )
+
+
+async def log_feed_events_bulk(db: aiosqlite.Connection, events: List[tuple]) -> None:
+    """Insert many feed events at once. events = [(plate, region, vehicle_type, event), …]."""
+    if not events:
+        return
+    now = _now()
+    await db.executemany(
+        "INSERT INTO feed_events (plate_number, region, vehicle_type, event, created_at) VALUES (?,?,?,?,?)",
+        [(e[0], e[1], e[2], e[3], now) for e in events],
     )
 
 

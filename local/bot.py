@@ -236,9 +236,23 @@ def _hunt_desc(h: dict) -> str:
 
 
 def _fmt_dt(value) -> str:
-    """Format an ISO timestamp as 'YYYY-MM-DD HH:MM' (UTC)."""
-    s = str(value)
-    return s[:16].replace("T", " ") if s else "—"
+    """Format an ISO UTC timestamp in Kyiv time as 'DD.MM.YYYY HH:MM' (default TZ: Europe/Kyiv)."""
+    s = str(value or "")
+    if not s:
+        return "—"
+    try:
+        import datetime as _dt
+        d = _dt.datetime.fromisoformat(s)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=_dt.timezone.utc)
+        try:
+            from zoneinfo import ZoneInfo
+            d = d.astimezone(ZoneInfo("Europe/Kyiv"))
+        except Exception:
+            d = d.astimezone(_dt.timezone(_dt.timedelta(hours=3)))  # Kyiv summer fallback
+        return d.strftime("%d.%m.%Y %H:%M")
+    except Exception:
+        return s[:16].replace("T", " ")
 
 
 def _plate_card(plate: str) -> str:
@@ -759,7 +773,7 @@ async def render_feed_results(bot: Bot, chat_id: int, state: FSMContext) -> None
         return
     lines = [f"📰 <b>{kl}</b> · {_PERIOD_LABEL[period]} · {cnt}\n"]
     for i, r in enumerate(rows):
-        when = str(r["event_at"])[:16].replace("T", " ")
+        when = _fmt_dt(r["event_at"])
         lines.append(f"{page * _PAGE + i + 1}. <b>{r['plate_number']}</b> · {r['region']}\n    🕒 {when}")
     b = InlineKeyboardBuilder()
     b.button(text="🔎 Детальніше", callback_data="fd_details")
@@ -2118,7 +2132,7 @@ async def cb_a_commit(cq: CallbackQuery) -> None:
         return
     ts = await db.get_meta("stage_ts") or "?"
     await show(cq.message.bot, cq.message.chat.id,
-               f"🔄 Оновлюю базу з черги ({cnt} номерів, від {str(ts)[:16].replace('T', ' ')})…",
+               f"🔄 Оновлюю базу з черги ({cnt} номерів, від {_fmt_dt(ts)})…",
                kb_back([("🛠 Адмінка", "admin")]))
     await cq.answer("Оновлюю…")
     asyncio.create_task(_commit_task(cq.message.bot, cq.message.chat.id))
@@ -2195,7 +2209,7 @@ async def cb_a_reports(cq: CallbackQuery) -> None:
         lines = ["🐞 <b>Останні звіти</b>\n"]
         for r in reports:
             who = f"@{r['username']}" if r.get("username") else str(r["chat_id"])
-            when = str(r["created_at"])[:16].replace("T", " ")
+            when = _fmt_dt(r["created_at"])
             lines.append(f"• {when} · {who}\n  {r['text'][:200]}")
         text = "\n".join(lines)
     await show(cq.message.bot, cq.message.chat.id, text, kb_back([("🛠 Адмінка", "admin")]))

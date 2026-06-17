@@ -238,6 +238,51 @@ async def upsert_plate(
     return int(row["id"]), not bool(row["is_available"])
 
 
+async def bulk_upsert_plates(conn: asyncpg.Connection, rows: List[Dict[str, Any]], now: str = None) -> List[Dict[str, Any]]:
+    """Batched insert/refresh of many plates in few round trips (vs per-row).
+
+    Returns one dict per upserted row: {id, plate_number, region, vehicle_type, inserted}
+    where ``inserted`` is True for brand-new plates (xmax=0). Far faster than upsert_plate
+    for large batches over a remote DB.
+    """
+    now = now or _now()
+    # De-dup on the unique key so a single statement never touches a row twice.
+    uniq: Dict[tuple, Dict[str, Any]] = {}
+    for r in rows:
+        parts = parse_plate(r["plate_number"])
+        key = (parts["plate_number"], r.get("tsc"), r.get("vehicle_type"))
+        uniq[key] = (parts, r)
+    items = list(uniq.values())
+    out: List[Dict[str, Any]] = []
+    BATCH = 1000
+    sql = (
+        "INSERT INTO plates (plate_number,letters_start,letters_end,digits,digits_int,region,"
+        "tsc,vehicle_type,price,is_available,first_seen_at,last_seen_at) "
+        "SELECT pn,ls,le,dg,di,rg,ts,vt,pr,1,$10,$10 FROM unnest("
+        "$1::text[],$2::text[],$3::text[],$4::text[],$5::bigint[],$6::text[],$7::text[],$8::text[],$9::float8[]) "
+        "AS t(pn,ls,le,dg,di,rg,ts,vt,pr) "
+        "ON CONFLICT (plate_number, tsc, vehicle_type) DO UPDATE SET "
+        "is_available=1, removed_at=NULL, last_seen_at=EXCLUDED.last_seen_at, price=EXCLUDED.price "
+        "RETURNING id, plate_number, region, vehicle_type, (xmax=0) AS inserted"
+    )
+    for i in range(0, len(items), BATCH):
+        chunk = items[i:i + BATCH]
+        pn = [p["plate_number"] for p, _ in chunk]
+        ls = [p["letters_start"] for p, _ in chunk]
+        le = [p["letters_end"] for p, _ in chunk]
+        dg = [p["digits"] for p, _ in chunk]
+        di = [p["digits_int"] for p, _ in chunk]
+        rg = [r["region"] for _, r in chunk]
+        ts = [r.get("tsc") for _, r in chunk]
+        vt = [r.get("vehicle_type") for _, r in chunk]
+        pr = [r.get("price") for _, r in chunk]
+        recs = await conn.fetch(sql, pn, ls, le, dg, di, rg, ts, vt, pr, now)
+        for rec in recs:
+            out.append({"id": rec["id"], "plate_number": rec["plate_number"], "region": rec["region"],
+                        "vehicle_type": rec["vehicle_type"], "inserted": rec["inserted"]})
+    return out
+
+
 async def mark_removed(
     conn: asyncpg.Connection, region: str, vehicle_type: Optional[str], seen_ids: List[int]
 ) -> List[Dict[str, Any]]:
@@ -276,6 +321,19 @@ async def log_feed_event(
         "INSERT INTO feed_events (plate_number, region, vehicle_type, event, created_at) "
         "VALUES ($1,$2,$3,$4,$5)",
         plate_number, region, vehicle_type, event, _now(),
+    )
+
+
+async def log_feed_events_bulk(conn: asyncpg.Connection, events: List[tuple]) -> None:
+    """Insert many feed events in one statement. events = [(plate, region, vehicle_type, event), …]."""
+    if not events:
+        return
+    now = _now()
+    await conn.execute(
+        "INSERT INTO feed_events (plate_number, region, vehicle_type, event, created_at) "
+        "SELECT p, r, v, e, $5 FROM unnest($1::text[],$2::text[],$3::text[],$4::text[]) AS t(p,r,v,e)",
+        [e[0] for e in events], [e[1] for e in events], [e[2] for e in events],
+        [e[3] for e in events], now,
     )
 
 
