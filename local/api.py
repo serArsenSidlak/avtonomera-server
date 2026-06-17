@@ -49,7 +49,8 @@ async def guard(request: Request, call_next):
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
 
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
-    if config.API_KEY and path not in _OPEN_PATHS and path not in ("/ingest", "/parse-job", "/stage"):
+    if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
+            and path not in ("/ingest", "/parse-job", "/stage"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -58,11 +59,48 @@ async def guard(request: Request, call_next):
 
 @app.on_event("startup")
 async def _warm() -> None:
-    """Warm the DB read cache on startup so the first request is fast."""
+    """Warm the DB read cache on startup so the first request is fast; register Viber webhook."""
     try:
         await db.warm_cache()
     except Exception:  # noqa: BLE001
         pass
+    if config.VIBER_TOKEN:
+        try:
+            import asyncio
+            from local import viber
+            await asyncio.to_thread(viber.set_webhook)
+        except Exception as exc:  # noqa: BLE001
+            print(f"[viber] set_webhook on startup failed: {exc!r}")
+
+
+@app.post("/viber/webhook")
+async def viber_webhook(request: Request) -> dict:
+    """Receive Viber events (signature-verified) and dispatch them in the background."""
+    import asyncio
+    import json as _json
+
+    from local import viber
+
+    body = await request.body()
+    sig = request.headers.get("x-viber-content-signature", "")
+    if not viber.valid_signature(body, sig):
+        raise HTTPException(403, "bad signature")
+    try:
+        event = _json.loads(body.decode("utf-8"))
+    except ValueError:
+        return {"status": "ignored"}
+    asyncio.create_task(viber.handle(event))
+    return {"status": "ok"}
+
+
+@app.get("/viber/set-webhook")
+async def viber_set_webhook(secret: str = "") -> dict:
+    """Manually (re)register the Viber webhook (secret-protected)."""
+    if not config.INGEST_SECRET or secret != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    from local import viber
+    import asyncio
+    return await asyncio.to_thread(viber.set_webhook)
 
 
 @app.get("/health")

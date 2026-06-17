@@ -53,6 +53,10 @@ API_RATE_PER_MIN: int = int(os.environ.get("LOCAL_API_RATE_PER_MIN", "120"))
 # (bumps the chat back up Telegram's list). Hours; 0 disables. Default daily.
 REFRESH_HOURS: int = int(os.environ.get("LOCAL_REFRESH_HOURS", "24"))
 
+# Viber bot (optional second channel). Token from partners.viber.com. Webhook on the server.
+VIBER_TOKEN: str = os.environ.get("LOCAL_VIBER_TOKEN", "")
+VIBER_WEBHOOK_URL: str = os.environ.get("LOCAL_VIBER_WEBHOOK_URL", "https://34.123.136.171.nip.io/viber/webhook")
+
 # Staging file for moderated DB updates (extension → /stage → admin commits, or auto after N h).
 STAGE_PATH: str = os.environ.get("LOCAL_STAGE_PATH", str(_ROOT / "staging.jsonl"))
 # Auto-commit staged data older than this many hours (if admin didn't commit manually).
