@@ -865,7 +865,8 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         for p in prices:
             label = f"{int(p):,} грн".replace(",", " ")
             b.button(text=label, callback_data=f"setpf:{int(p)}")
-        b.button(text="⬅️ Назад", callback_data="step:region")
+        # Back goes to series only when a concrete region was chosen (series step exists then).
+        b.button(text="⬅️ Назад", callback_data="step:series" if f.get("region") else "step:region")
         b.button(text="➡️ Далі", callback_data="setpf:__all__")
         b.button(text="⬅️ Меню", callback_data="menu")
         rows = [1] + [2] * ((len(prices) + 1) // 2) + [2, 1]
@@ -874,6 +875,9 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         await show(bot, chat_id, head + note, b.as_markup())
 
     elif step == "series":
+        if not f.get("region"):  # series are region-specific → skip this step for "all regions"
+            await render_step(bot, chat_id, state, "price")
+            return
         series = await db.distinct_series(region=f.get("region"), vehicle_type=f.get("vtype"))
         b.button(text="✅ Без фільтру по серії", callback_data="sets:__all__")
         for s in series:
@@ -948,8 +952,11 @@ async def cb_set_region(cq: CallbackQuery, state: FSMContext) -> None:
         f["page"] = 0
         await _set_filters(state, f)
         await render_results(cq.message.bot, cq.message.chat.id, state)
-    else:
+    elif f.get("region"):
+        # Series are region-specific → only offer the series step for a concrete region.
         await render_step(cq.message.bot, cq.message.chat.id, state, "series")
+    else:
+        await render_step(cq.message.bot, cq.message.chat.id, state, "price")
     await cq.answer()
 
 
