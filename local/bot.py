@@ -2285,6 +2285,7 @@ async def main() -> None:
         raise SystemExit("LOCAL_BOT_TOKEN is not set (create a product bot via @BotFather)")
     global BOT_USERNAME
     await db.init_db()
+    await db.warm_cache()  # pre-compute hot aggregates so the first menu open is instant
     bot = Bot(token=config.BOT_TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
     try:
         me = await bot.get_me()

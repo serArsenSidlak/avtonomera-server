@@ -56,6 +56,15 @@ async def guard(request: Request, call_next):
     return await call_next(request)
 
 
+@app.on_event("startup")
+async def _warm() -> None:
+    """Warm the DB read cache on startup so the first request is fast."""
+    try:
+        await db.warm_cache()
+    except Exception:  # noqa: BLE001
+        pass
+
+
 @app.get("/health")
 async def health() -> dict:
     """Liveness probe."""
@@ -141,11 +150,8 @@ async def feed(
 
 @app.get("/collections")
 async def collections() -> list:
-    """Curated collections with live counts."""
-    out = []
-    for key, label in db.COLLECTIONS.items():
-        out.append({"key": key, "label": label, "count": await db.count_filtered(collection=key)})
-    return out
+    """Curated collections with counts (cached in the DB layer)."""
+    return await db.collection_counts()
 
 
 @app.get("/popular")

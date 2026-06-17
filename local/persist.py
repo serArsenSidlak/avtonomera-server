@@ -63,6 +63,7 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
         await db.set_meta("seeded", "1")
     import datetime as dt
     await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    db.invalidate_cache()
     return {"scraped": len(rows), "new_ids": new_ids, "removed": removed}
 
 
@@ -93,6 +94,7 @@ async def apply_table(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
         await db.set_meta("seeded", "1")
     import datetime as dt
     await db.set_meta("last_scan", dt.datetime.now(dt.timezone.utc).isoformat())
+    db.invalidate_cache()
     return {"processed": len(rows), "new_ids": new_ids}
 
 

@@ -29,6 +29,39 @@ from local.db_sqlite import (  # noqa: F401  (re-exported via local/db.py star i
 
 _pool: Optional[asyncpg.Pool] = None
 
+# In-memory TTL cache for hot, slowly-changing reads (stats, dictionaries, collection counts).
+# Aggregates over the full plates table are expensive on a remote DB, so we memoise them.
+import time as _time
+
+_CACHE: Dict[str, Any] = {}
+
+
+def invalidate_cache() -> None:
+    """Drop all cached reads (call after a scan/commit changes the data)."""
+    _CACHE.clear()
+
+
+async def warm_cache() -> None:
+    """Pre-compute the hot cached reads so the first user doesn't pay the cold cost."""
+    try:
+        await get_stats()
+        await distinct_regions()
+        await distinct_vehicle_types()
+        await collection_counts()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _memo(key: str, ttl: float, fn):
+    """Return a cached value for ``key`` (recompute via ``fn`` when stale)."""
+    now = _time.monotonic()
+    e = _CACHE.get(key)
+    if e and now - e[0] < ttl:
+        return e[1]
+    val = await fn()
+    _CACHE[key] = (now, val)
+    return val
+
 
 def _now() -> str:
     """UTC ISO timestamp string (matches db_sqlite so migrated rows compare correctly)."""
@@ -301,15 +334,33 @@ async def search_plates(query: str, limit: int = 20, only_available: bool = True
 
 
 async def distinct_regions() -> List[str]:
-    """Regions that have plates, sorted."""
+    """Regions that have plates, sorted (cached — changes rarely)."""
+    return await _memo("regions", 3600, _distinct_regions_raw)
+
+
+async def _distinct_regions_raw() -> List[str]:
     return [r[0] for r in await _fetch("SELECT DISTINCT region FROM plates ORDER BY region")]
 
 
 async def distinct_vehicle_types() -> List[str]:
-    """Distinct vehicle types present, sorted."""
+    """Distinct vehicle types present, sorted (cached)."""
+    return await _memo("vtypes", 3600, _distinct_vehicle_types_raw)
+
+
+async def _distinct_vehicle_types_raw() -> List[str]:
     return [r[0] for r in await _fetch(
         "SELECT DISTINCT vehicle_type FROM plates WHERE vehicle_type IS NOT NULL ORDER BY vehicle_type"
     )]
+
+
+async def collection_counts() -> List[Dict[str, Any]]:
+    """Curated collections with counts (cached — heavy aggregates over the full table)."""
+    async def fn():
+        out = []
+        for k, v in COLLECTIONS.items():
+            out.append({"key": k, "label": v, "count": await count_filtered(collection=k)})
+        return out
+    return await _memo("colcounts", 900, fn)
 
 
 async def distinct_prices(
@@ -583,7 +634,11 @@ async def list_favorites(chat_id: int) -> List[str]:
 
 
 async def get_stats() -> Dict[str, Any]:
-    """Return meaningful counters for the stats screen."""
+    """Cached aggregate counters for the main menu / stats screen (heavy; memoised ~90s)."""
+    return await _memo("stats", 300, _get_stats_raw)
+
+
+async def _get_stats_raw() -> Dict[str, Any]:
     row = dict(await _fetchrow(
         "SELECT COUNT(*) total, "
         "SUM(CASE WHEN is_available=1 THEN 1 ELSE 0 END) available, "

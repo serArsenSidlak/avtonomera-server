@@ -370,6 +370,24 @@ def _collection_clause(kind: str, a: str = "") -> str:
     }.get(kind, "1=1")
 
 
+def invalidate_cache() -> None:
+    """No-op for the SQLite backend (local file DB is already fast)."""
+    return None
+
+
+async def warm_cache() -> None:
+    """No-op for the SQLite backend."""
+    return None
+
+
+async def collection_counts() -> List[Dict[str, Any]]:
+    """Curated collections with live counts."""
+    out: List[Dict[str, Any]] = []
+    for k, v in COLLECTIONS.items():
+        out.append({"key": k, "label": v, "count": await count_filtered(collection=k)})
+    return out
+
+
 async def popular_combos(limit: int = 10) -> List[Dict[str, Any]]:
     """Most-favorited digit combinations (social proof / discovery)."""
     async with aiosqlite.connect(config.DB_PATH) as db:
