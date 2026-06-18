@@ -240,67 +240,21 @@ async def ingest(request: Request) -> dict:
 # Bookmarklet body (single IIFE). Placeholders @SRV@/@SEC@/@MAP@/@REGS@/@TYPES@ filled per request;
 # newlines are collapsed to spaces before serving (a javascript: URL must be one line).
 _COLLECTOR_JS = """
-(function(){
-try{
-var SRV='@SRV@';
-var SEC='@SEC@';
-var M=@MAP@;
-var REGS=@REGS@;
-var TY=@TYPES@;
-var LAT={'A':'А','B':'В','C':'С','E':'Е','H':'Н','I':'І','K':'К','M':'М','O':'О','P':'Р','T':'Т','X':'Х'};
-function norm(p){p=(p||'').replace(/[\\s-]/g,'').toUpperCase();var o='';for(var i=0;i<p.length;i++){o+=(LAT[p[i]]||p[i]);}return o;}
-function vt(p){var s=p.slice(-2);if(M[s])return M[s];var a=s.charAt(0),b=s.charAt(1);if(a==='F')return TY[2];if(a==='Х'&&'FGJLNRSUV'.indexOf(b)>=0)return TY[2];if(a==='J'||a==='L')return TY[3];if(a==='R')return TY[4];if(a==='U'||a==='Y'||a==='Z')return TY[1];return TY[0];}
-function parseRows(root){
-var tbl=null,tabs=root.getElementsByTagName('table');
-for(var i=0;i<tabs.length;i++){var hd=tabs[i].querySelector('tr');if(hd&&hd.textContent.indexOf('Номерний')>=0){tbl=tabs[i];break;}}
-if(!tbl){return [];}
-var trs=tbl.querySelectorAll('tr'),rows=[];
-for(var j=1;j<trs.length;j++){var td=trs[j].querySelectorAll('td');if(td.length<3){continue;}var pl=td[0].textContent.trim();if(!pl||pl.indexOf('Номерний')>=0){continue;}var pm=td[1].textContent.replace(/\\s/g,'').match(/[0-9.,]+/);var pr=pm?parseFloat(pm[0].replace(',','.')):null;var n=norm(pl);rows.push({plate_number:n,price:pr,tsc:(td[2].textContent.trim()||null),vehicle_type:vt(n)});}
-return rows;
-}
-function dedupe(rows){var seen={},out=[];for(var i=0;i<rows.length;i++){var k=rows[i].plate_number+'|'+(rows[i].tsc||'');if(seen[k]){continue;}seen[k]=1;out.push(rows[i]);}return out;}
-function detRegion(){var det='';var rsel=document.querySelector('#region');if(rsel&&rsel.selectedIndex>=0){det=rsel.options[rsel.selectedIndex].text.trim();}det=det.replace(/\\s*область$/i,'').trim();if(/київ/i.test(det)){det='м. Київ';}return det;}
-function show(rows){
-rows=dedupe(rows);
-if(!rows.length){alert('Не знайшов номерів. Спершу обери регіон + Весь регіон + тип і натисни ПЕРЕГЛЯНУТИ.');return;}
-var det=detRegion();
-var ov=document.createElement('div');ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif';
-var h='<div style="background:#fff;color:#111;border-radius:16px;padding:18px;width:330px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,.35)">';
-h+='<div style="font-weight:700;font-size:17px;margin-bottom:8px">Відправити в базу</div>';
-h+='<div style="font-size:14px;margin-bottom:10px">Знайдено <b>'+rows.length+'</b> номерів</div>';
-h+='<div style="font-size:13px;color:#555;margin-bottom:4px">Регіон:</div>';
-h+='<select id="hscR" style="width:100%;padding:9px;font-size:15px;border:1px solid #ccc;border-radius:8px;margin-bottom:12px">';
-for(var k=0;k<REGS.length;k++){h+='<option'+(REGS[k]===det?' selected':'')+'>'+REGS[k]+'</option>';}
-h+='</select>';
-h+='<div style="display:flex;gap:8px"><button id="hscGo" style="flex:1;background:#16a34a;color:#fff;border:0;border-radius:10px;padding:12px;font-weight:700;font-size:15px">Відправити</button>';
-h+='<button id="hscX" style="background:#e5e7eb;color:#111;border:0;border-radius:10px;padding:12px 14px;font-size:15px">Закрити</button></div>';
-h+='<div id="hscM" style="font-size:13px;margin-top:10px;color:#444"></div></div>';
-ov.innerHTML=h;document.body.appendChild(ov);
-document.getElementById('hscX').onclick=function(){ov.remove();};
-document.getElementById('hscGo').onclick=function(){
-var reg=document.getElementById('hscR').value;
-var pr={};for(var i=0;i<rows.length;i++){rows[i].region=reg;pr[rows[i].vehicle_type]=(pr[rows[i].vehicle_type]||0)+1;}
-var sc=[];for(var key in pr){sc.push([reg,key]);}
-var data={secret:SEC,rows:rows,ok_scopes:sc};
-var m=document.getElementById('hscM');m.textContent='Відправляю…';
-fetch(SRV+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json();}).then(function(d){m.innerHTML='✅ Готово: нових '+(d['new']||0)+', знято '+(d.removed||0)+', всього '+(d.scraped||0)+'.';}).catch(function(){m.textContent='Відправляю резервним способом (відкриється вкладка)…';var f=document.createElement('form');f.method='POST';f.action=SRV+'/collect';f.target='_blank';var ip=document.createElement('input');ip.type='hidden';ip.name='payload';ip.value=JSON.stringify(data);f.appendChild(ip);document.body.appendChild(f);f.submit();});
-};
-}
-var ind=document.createElement('div');ind.textContent='Збираю повний список…';ind.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#111;color:#fff;padding:10px 16px;border-radius:10px;font-family:-apple-system,sans-serif;font-size:14px';document.body.appendChild(ind);
-function fb(){ind.remove();show(parseRows(document));}
-var rs=document.querySelector('#region');var form=rs?rs.closest('form'):document.querySelector('form');
-if(!form){fb();return;}
-try{
-var fd=[];var els=form.querySelectorAll('input,select,textarea');
-for(var i=0;i<els.length;i++){var e=els[i];if(!e.name){continue;}if((e.type==='checkbox'||e.type==='radio')&&!e.checked){continue;}if(e.type==='submit'||e.type==='button'){continue;}fd.push(encodeURIComponent(e.name)+'='+encodeURIComponent(e.value));}
-var sb=form.querySelector('input[type=submit],button[type=submit]');if(sb&&sb.name){fd.push(encodeURIComponent(sb.name)+'='+encodeURIComponent(sb.value||''));}
-var body=fd.join('&');var act=form.getAttribute('action');if(!act){act=location.href;}var mth=(form.getAttribute('method')||'POST').toUpperCase();
-var url=act,opt={method:mth,credentials:'include'};
-if(mth==='GET'){url=act+(act.indexOf('?')>=0?'&':'?')+body;}else{opt.headers={'Content-Type':'application/x-www-form-urlencoded'};opt.body=body;}
-fetch(url,opt).then(function(r){return r.text();}).then(function(t){ind.remove();var doc=new DOMParser().parseFromString(t,'text/html');var rows=parseRows(doc);if(rows&&rows.length){show(rows);}else{show(parseRows(document));}}).catch(fb);
-}catch(e){fb();}
-}catch(e){alert('Помилка: '+e.message);}
-})();
+(function(){try{
+var S='@SRV@',K='@SEC@';
+var rs=document.querySelector('#region');
+var reg=rs&&rs.selectedIndex>=0?rs.options[rs.selectedIndex].text.trim():'';
+var form=rs?rs.closest('form'):document.querySelector('form');
+if(!form){alert('Спершу обери регіон + Весь регіон + тип і натисни ПЕРЕГЛЯНУТИ.');return;}
+var p=[],es=form.querySelectorAll('input,select,textarea');
+for(var i=0;i<es.length;i++){var e=es[i];if(!e.name){continue;}if((e.type=='checkbox'||e.type=='radio')&&!e.checked){continue;}if(e.type=='submit'||e.type=='button'){continue;}p.push(encodeURIComponent(e.name)+'='+encodeURIComponent(e.value));}
+var sb=form.querySelector('input[type=submit],button[type=submit]');if(sb&&sb.name){p.push(encodeURIComponent(sb.name)+'='+encodeURIComponent(sb.value||''));}
+var act=form.getAttribute('action')||location.href,m=(form.getAttribute('method')||'POST').toUpperCase();
+var u=act,o={method:m,credentials:'include'};
+if(m=='GET'){u=act+(act.indexOf('?')<0?'?':'&')+p.join('&');}else{o.headers={'Content-Type':'application/x-www-form-urlencoded'};o.body=p.join('&');}
+alert('Збираю повний список регіону, зачекай кілька секунд…');
+fetch(u,o).then(function(r){return r.text();}).then(function(t){var f=document.createElement('form');f.method='POST';f.action=S+'/collect-html';f.target='_blank';f.acceptCharset='UTF-8';function a(n,v){var x=document.createElement('input');x.type='hidden';x.name=n;x.value=v;f.appendChild(x);}a('secret',K);a('region',reg);a('html',t);document.body.appendChild(f);f.submit();}).catch(function(e){alert('Помилка збору: '+e);});
+}catch(e){alert('Помилка: '+e.message);}})();
 """
 
 _COLLECTOR_PAGE = """<!doctype html><html lang=uk><head><meta charset=utf-8>
@@ -364,6 +318,149 @@ async def _series_type_map() -> dict:
         if s not in best or n > best[s][1]:
             best[s] = (t, n)
     return {s: tn[0] for s, tn in best.items()}
+
+
+# Latin→Cyrillic for plate normalization (opendata prints plates in Latin lookalikes).
+_PLATE_LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "I": "І",
+                                "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
+import re as _re
+
+_PLATE_RE = _re.compile(r"^\D{2}\d{4}\D{2}$")
+_TR_RE = _re.compile(r"<tr[^>]*>(.*?)</tr>", _re.S | _re.I)
+_TD_RE = _re.compile(r"<t[dh][^>]*>(.*?)</t[dh]>", _re.S | _re.I)
+_TAG_RE = _re.compile(r"<[^>]+>")
+_NUM_RE = _re.compile(r"[\d.,]+")
+
+
+def _plate_norm(raw: str) -> str:
+    return _re.sub(r"[\s\-]", "", raw or "").strip().upper().translate(_PLATE_LAT2CYR)
+
+
+def _vtype_server(plate: str, smap: dict) -> str:
+    """Vehicle type from plate series (last 2 letters): exact DB map, then scheme rule (Додаток 5)."""
+    s = plate[-2:]
+    if s in smap:
+        return smap[s]
+    a, b = s[:1], s[1:2]
+    if a == "F":
+        return "Причіп"
+    if a == "Х" and b in "FGJLNRSUV":
+        return "Причіп"
+    if a in ("J", "L"):
+        return "Мотоцикл"
+    if a == "R":
+        return "Електромотоцикл"
+    if a in ("U", "Y", "Z"):
+        return "Електромобіль"
+    return "Легковий, вантажний"
+
+
+def _canon_region(label: str) -> str:
+    """Map an opendata region label to the canonical DB region name."""
+    s = _re.sub(r"\s*область$", "", (label or "").strip(), flags=_re.I).strip()
+    low = s.lower().replace(".", "").replace(" ", "")
+    if low in ("київ", "мкиїв", "містокиїв"):
+        return "м. Київ"
+    if s in _COLLECT_REGIONS:
+        return s
+    for c in _COLLECT_REGIONS:  # tolerate minor wording differences
+        if c == s or c.startswith(s) or s.startswith(c):
+            return c
+    return s
+
+
+def _parse_plate_html(html: str, smap: dict) -> list:
+    """Extract plate rows from an opendata results HTML page (server-side, stdlib only)."""
+    def _txt(x: str) -> str:
+        return _TAG_RE.sub(" ", x).replace("&nbsp;", " ").replace("&amp;", "&").strip()
+
+    rows, seen = [], set()
+    for tr in _TR_RE.findall(html or ""):
+        tds = _TD_RE.findall(tr)
+        if len(tds) < 3:
+            continue
+        plate = _plate_norm(_txt(tds[0]))
+        if not _PLATE_RE.match(plate):
+            continue
+        tsc = _txt(tds[2]) or None
+        key = (plate, tsc)
+        if key in seen:
+            continue
+        seen.add(key)
+        pm = _NUM_RE.search(_txt(tds[1]).replace(" ", ""))
+        price = None
+        if pm:
+            try:
+                price = float(pm.group(0).replace(",", "."))
+            except ValueError:
+                price = None
+        rows.append({"plate_number": plate, "price": price, "tsc": tsc,
+                     "vehicle_type": _vtype_server(plate, smap)})
+    return rows
+
+
+@app.post("/collect-html")
+async def collect_html(request: Request):
+    """Receive a RAW opendata results page from the tiny bookmarklet; parse + classify + ingest here.
+
+    Body (JSON or x-www-form-urlencoded): {secret, region, html}. The server extracts all plates
+    (full list, not the visible 10/page), assigns vehicle_type by series, and applies the snapshot
+    for that region (new + removed). Keeps the bookmarklet tiny enough to fit in a Safari bookmark.
+    """
+    import json as _json
+
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "collect disabled (no secret configured)")
+    ctype = request.headers.get("content-type", "")
+    is_form = "application/json" not in ctype
+    if is_form:
+        from urllib.parse import parse_qs
+
+        raw = (await request.body()).decode("utf-8", "replace")
+        q = parse_qs(raw, keep_blank_values=True)
+        secret = (q.get("secret") or [""])[0]
+        region_label = (q.get("region") or [""])[0]
+        html = (q.get("html") or [""])[0]
+    else:
+        body = await request.json()
+        secret = body.get("secret", "")
+        region_label = body.get("region", "")
+        html = body.get("html", "")
+    if secret != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+
+    smap = await _series_type_map()
+    region = _canon_region(region_label)
+    rows = _parse_plate_html(html, smap)
+    for r in rows:
+        r["region"] = region
+
+    if not rows:
+        msg = ("Не знайшов жодного номера в сторінці. Переконайся, що відкрита таблиця "
+               "результатів (Регіон → Весь регіон → ПЕРЕГЛЯНУТИ).")
+        if is_form:
+            return HTMLResponse(
+                "<!doctype html><meta charset=utf-8><body style='font-family:-apple-system,sans-serif;"
+                f"padding:28px;background:#0f1115;color:#eef1f6'><h2>⚠️ 0 номерів</h2><p>{msg}</p></body>")
+        return {"region": region, "scraped": 0, "new": 0, "removed": 0, "notified": 0, "note": msg}
+
+    from local.persist import apply_scan, notify_new
+
+    present = sorted({r["vehicle_type"] for r in rows})
+    ok_scopes = {(region, t) for t in present}
+    applied = await apply_scan(rows, ok_scopes)
+    notified = await notify_new(applied["new_ids"])
+    result = {"region": region, "scraped": applied["scraped"], "new": len(applied["new_ids"]),
+              "removed": applied["removed"], "notified": notified}
+    if not is_form:
+        return result
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8>"
+        "<body style='font-family:-apple-system,sans-serif;padding:28px;background:#0f1115;color:#eef1f6'>"
+        f"<h2>✅ {region}</h2>"
+        f"<p>Усього в знімку: <b>{result['scraped']}</b><br>Нових: <b>{result['new']}</b><br>"
+        f"Знято (зникли): <b>{result['removed']}</b></p>"
+        "<p style='color:#9aa4b2'>Можеш закрити цю вкладку і повернутись до сайту.</p></body>")
 
 
 @app.post("/collect")
