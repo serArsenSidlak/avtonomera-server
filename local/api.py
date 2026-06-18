@@ -50,7 +50,7 @@ async def guard(request: Request, call_next):
 
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
-            and path not in ("/ingest", "/parse-job", "/stage"):
+            and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collector"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -235,6 +235,185 @@ async def ingest(request: Request) -> dict:
         "scraped": applied["scraped"], "new": len(applied["new_ids"]),
         "removed": applied["removed"], "notified": notified,
     }
+
+
+# Bookmarklet body (single IIFE). Placeholders @SRV@/@SEC@/@MAP@/@REGS@/@TYPES@ filled per request;
+# newlines are collapsed to spaces before serving (a javascript: URL must be one line).
+_COLLECTOR_JS = """
+(function(){
+try{
+var SRV='@SRV@';
+var SEC='@SEC@';
+var M=@MAP@;
+var REGS=@REGS@;
+var TY=@TYPES@;
+var LAT={'A':'А','B':'В','C':'С','E':'Е','H':'Н','I':'І','K':'К','M':'М','O':'О','P':'Р','T':'Т','X':'Х'};
+function norm(p){p=(p||'').replace(/[\\s-]/g,'').toUpperCase();var o='';for(var i=0;i<p.length;i++){o+=(LAT[p[i]]||p[i]);}return o;}
+function vt(p){var s=p.slice(-2);if(M[s])return M[s];var a=s.charAt(0),b=s.charAt(1);if(a==='F')return TY[2];if(a==='Х'&&'FGJLNRSUV'.indexOf(b)>=0)return TY[2];if(a==='J'||a==='L')return TY[3];if(a==='R')return TY[4];if(a==='U'||a==='Y'||a==='Z')return TY[1];return TY[0];}
+var tbl=null,tabs=document.getElementsByTagName('table');
+for(var i=0;i<tabs.length;i++){var h=tabs[i].querySelector('tr');if(h&&h.textContent.indexOf('Номерний')>=0){tbl=tabs[i];break;}}
+if(!tbl){alert('Не бачу таблицю з номерами. Спершу обери регіон + Весь регіон + тип і натисни ПЕРЕГЛЯНУТИ.');return;}
+var trs=tbl.querySelectorAll('tr'),rows=[];
+for(var j=1;j<trs.length;j++){var td=trs[j].querySelectorAll('td');if(td.length<3){continue;}var pl=td[0].textContent.trim();if(!pl||pl.indexOf('Номерний')>=0){continue;}var pm=td[1].textContent.replace(/\\s/g,'').match(/[0-9.,]+/);var pr=pm?parseFloat(pm[0].replace(',','.')):null;var n=norm(pl);rows.push({plate_number:n,price:pr,tsc:(td[2].textContent.trim()||null),vehicle_type:vt(n)});}
+if(!rows.length){alert('Таблиця порожня — немає номерів для відправки.');return;}
+var det='';var rsel=document.querySelector('#region');if(rsel&&rsel.selectedIndex>=0){det=rsel.options[rsel.selectedIndex].text.trim();}
+det=det.replace(/\\s*область$/i,'').trim();if(/київ/i.test(det)){det='м. Київ';}
+var ov=document.createElement('div');ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif';
+var h='<div style="background:#fff;color:#111;border-radius:16px;padding:18px;width:330px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,.35)">';
+h+='<div style="font-weight:700;font-size:17px;margin-bottom:8px">Відправити в базу</div>';
+h+='<div style="font-size:14px;margin-bottom:10px">Знайдено <b>'+rows.length+'</b> номерів</div>';
+h+='<div style="font-size:13px;color:#555;margin-bottom:4px">Регіон:</div>';
+h+='<select id="hscR" style="width:100%;padding:9px;font-size:15px;border:1px solid #ccc;border-radius:8px;margin-bottom:12px">';
+for(var k=0;k<REGS.length;k++){h+='<option'+(REGS[k]===det?' selected':'')+'>'+REGS[k]+'</option>';}
+h+='</select>';
+h+='<div style="display:flex;gap:8px"><button id="hscGo" style="flex:1;background:#16a34a;color:#fff;border:0;border-radius:10px;padding:12px;font-weight:700;font-size:15px">Відправити</button>';
+h+='<button id="hscX" style="background:#e5e7eb;color:#111;border:0;border-radius:10px;padding:12px 14px;font-size:15px">Закрити</button></div>';
+h+='<div id="hscM" style="font-size:13px;margin-top:10px;color:#444"></div></div>';
+ov.innerHTML=h;document.body.appendChild(ov);
+document.getElementById('hscX').onclick=function(){ov.remove();};
+document.getElementById('hscGo').onclick=function(){
+var reg=document.getElementById('hscR').value;
+for(var i=0;i<rows.length;i++){rows[i].region=reg;}
+var sc=[];for(var t=0;t<TY.length;t++){sc.push([reg,TY[t]]);}
+var data={secret:SEC,rows:rows,ok_scopes:sc};
+var m=document.getElementById('hscM');m.textContent='Відправляю…';
+fetch(SRV+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json();}).then(function(d){m.innerHTML='✅ Готово: нових '+(d['new']||0)+', знято '+(d.removed||0)+', всього '+(d.scraped||0)+'.';}).catch(function(){m.textContent='Відправляю резервним способом (відкриється вкладка)…';var f=document.createElement('form');f.method='POST';f.action=SRV+'/collect';f.target='_blank';var ip=document.createElement('input');ip.type='hidden';ip.name='payload';ip.value=JSON.stringify(data);f.appendChild(ip);document.body.appendChild(f);f.submit();});
+};
+}catch(e){alert('Помилка: '+e.message);}
+})();
+"""
+
+_COLLECTOR_PAGE = """<!doctype html><html lang=uk><head><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>Збирач для iPhone</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#0f1115;color:#eef1f6;margin:0;padding:18px;line-height:1.5}
+h2{margin:0 0 12px}code{background:#1b1f27;padding:1px 5px;border-radius:5px}
+textarea{width:100%;height:120px;background:#1b1f27;color:#9be7a0;border:1px solid #333;border-radius:10px;padding:10px;font-family:ui-monospace,monospace;font-size:11px}
+button{background:#3b82f6;color:#fff;border:0;border-radius:10px;padding:11px 16px;font-weight:700;font-size:15px;margin-top:10px}
+ol{padding-left:20px}li{margin-bottom:8px}.box{background:#161a22;border:1px solid #232834;border-radius:14px;padding:16px;margin-bottom:16px}</style>
+</head><body>
+<h2>📲 Збирач номерів для iPhone (Safari)</h2>
+<div class=box>
+<b>1. Скопіюй код закладки:</b>
+<textarea id=bm readonly>@BMTEXT@</textarea>
+<button onclick="var t=document.getElementById('bm');t.select();try{navigator.clipboard.writeText(t.value);}catch(e){document.execCommand('copy');}this.textContent='✅ Скопійовано';">📋 Скопіювати код</button>
+</div>
+<div class=box>
+<b>2. Створи закладку в Safari</b>
+<ol>
+<li>Відкрий будь-яку сторінку → кнопка «Поділитися» <code>⬆️</code> → <b>Додати закладку</b> → Зберегти.</li>
+<li>Відкрий <b>Закладки</b> → <b>Змінити</b> → обери цю нову закладку.</li>
+<li>Назву постав, напр., <code>📤 Зібрати номери</code>, а в полі <b>адреси</b> зітри все і <b>встав скопійований код</b>. Готово.</li>
+</ol>
+</div>
+<div class=box>
+<b>3. Як користуватись</b>
+<ol>
+<li>Зайди на <code>opendata.hsc.gov.ua/check-leisure-license-plates</code>.</li>
+<li>Обери <b>регіон</b> → <b>Весь регіон</b> → тип <b>(будь-який / усі)</b> → натисни <b>ПЕРЕГЛЯНУТИ</b>.</li>
+<li>Коли зʼявиться таблиця з номерами — відкрий закладку <b>📤 Зібрати номери</b> (через адресний рядок або меню закладок).</li>
+<li>У віконці перевір <b>регіон</b> і натисни <b>Відправити</b>. Дата збору фіксується автоматично, база оновлюється саме по цьому регіону.</li>
+</ol>
+</div>
+<p style="color:#9aa4b2;font-size:13px">Тип ТЗ визначається автоматично по серії номера. Відстежуються і нові, і зниклі номери в межах регіону.</p>
+</body></html>"""
+
+
+# ── iPhone/Safari bookmarklet collector (manual per-region opendata harvest) ──
+# Canonical region names (must match the `plates.region` values in the DB so removals reconcile).
+_COLLECT_REGIONS = [
+    "Вінницька", "Волинська", "Дніпропетровська", "Донецька", "Житомирська", "Закарпатська",
+    "Запорізька", "Івано-Франківська", "Київська", "Кіровоградська", "Луганська", "Львівська",
+    "Миколаївська", "Одеська", "Полтавська", "Рівненська", "Сумська", "Тернопільська",
+    "Харківська", "Херсонська", "Хмельницька", "Черкаська", "Чернівецька", "Чернігівська", "м. Київ",
+]
+_COLLECT_TYPES = ["Легковий, вантажний", "Електромобіль", "Причіп", "Мотоцикл", "Електромотоцикл"]
+
+
+async def _series_type_map() -> dict:
+    """Majority series→vehicle_type map from the live DB (so the bookmarklet stays current)."""
+    try:
+        async with db.acquire() as con:
+            rows = await con.fetch(
+                "SELECT right(plate_number,2) AS s, vehicle_type AS t, count(*) AS n "
+                "FROM plates WHERE plate_number ~ '..[0-9]{4}..$' GROUP BY 1,2")
+    except Exception:  # noqa: BLE001
+        return {}
+    best: dict = {}
+    for r in rows:
+        s, t, n = r["s"], r["t"], r["n"]
+        if s not in best or n > best[s][1]:
+            best[s] = (t, n)
+    return {s: tn[0] for s, tn in best.items()}
+
+
+@app.post("/collect")
+async def collect(request: Request):
+    """Receive a manually-harvested region snapshot from the iPhone bookmarklet and apply it.
+
+    Accepts JSON (fetch) OR form-encoded `payload` (CSP fallback that posts into a new tab).
+    Body: {secret, rows:[{plate_number,price,tsc,region,vehicle_type}], ok_scopes:[[region,type]]}.
+    """
+    import json as _json
+
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "collect disabled (no secret configured)")
+    ctype = request.headers.get("content-type", "")
+    is_form = "application/json" not in ctype
+    if is_form:
+        form = await request.form()
+        body = _json.loads(form.get("payload") or "{}")
+    else:
+        body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    from local.persist import apply_scan, notify_new
+
+    rows = body.get("rows") or []
+    ok_scopes = {(s[0], s[1]) for s in (body.get("ok_scopes") or [])}
+    applied = await apply_scan(rows, ok_scopes)
+    notified = await notify_new(applied["new_ids"])
+    result = {"scraped": applied["scraped"], "new": len(applied["new_ids"]),
+              "removed": applied["removed"], "notified": notified}
+    if not is_form:
+        return result
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8>"
+        "<body style='font-family:-apple-system,sans-serif;padding:28px;background:#0f1115;color:#eef1f6'>"
+        f"<h2>✅ Відправлено в базу</h2><p>Регіон оброблено.</p>"
+        f"<p>Нових: <b>{result['new']}</b><br>Знято (зникли): <b>{result['removed']}</b><br>"
+        f"Усього в знімку: <b>{result['scraped']}</b></p>"
+        "<p style='color:#9aa4b2'>Можеш закрити цю вкладку і повернутись до сайту.</p></body>")
+
+
+@app.get("/collector")
+async def collector_page(k: str = ""):
+    """Token-gated install page: the iPhone Safari bookmarklet + setup steps (k = app key)."""
+    import json as _json
+
+    if not config.API_KEY or k != config.API_KEY:
+        raise HTTPException(403, "forbidden")
+    smap = await _series_type_map()
+    one_line = " ".join(ln.strip() for ln in _COLLECTOR_JS.strip().splitlines())
+    srv = (config.SERVER_INGEST_URL.rstrip("/") or "https://34.123.136.171.nip.io").rstrip("/")
+    if srv.endswith("/ingest"):
+        srv = srv[: -len("/ingest")]
+    js = (one_line
+          .replace("@SRV@", srv)
+          .replace("@SEC@", config.INGEST_SECRET)
+          .replace("@MAP@", _json.dumps(smap, ensure_ascii=False))
+          .replace("@REGS@", _json.dumps(_COLLECT_REGIONS, ensure_ascii=False))
+          .replace("@TYPES@", _json.dumps(_COLLECT_TYPES, ensure_ascii=False)))
+    bookmarklet = "javascript:" + js
+    page = _COLLECTOR_PAGE.replace("@BM@", _html_attr(bookmarklet)).replace("@BMTEXT@", _html_text(bookmarklet))
+    return HTMLResponse(page)
+
+
+def _html_attr(s: str) -> str:
+    return s.replace("&", "&amp;").replace('"', "&quot;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _html_text(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
 @app.post("/stage")
