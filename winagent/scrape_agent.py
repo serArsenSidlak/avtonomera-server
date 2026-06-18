@@ -68,6 +68,34 @@ def normalize_plate(raw):
     return re.sub(r"[\s\-]", "", raw or "").strip().upper().translate(_LAT2CYR)
 
 
+# Vehicle types we track (must match DB labels). opendata returns the whole region without a type
+# column, so we recover the type from the plate's series (last 2 letters) per Додаток 5 — special
+# categories use Latin series letters (F=причіп, J/L=мото, R=електромото, U/Y/Z=електро), regular
+# cars use Cyrillic. SERIES_TYPE below is the exact majority mapping derived from our own DB
+# (197 series, 99.86% pure); _vtype falls back to the scheme rule for any unseen series.
+ALL_TYPES = ["Легковий, вантажний", "Електромобіль", "Причіп", "Мотоцикл", "Електромотоцикл"]
+SERIES_TYPE = {"ВА": "Легковий, вантажний", "ІВ": "Легковий, вантажний", "LК": "Мотоцикл", "ОС": "Легковий, вантажний", "ОА": "Легковий, вантажний", "МЕ": "Легковий, вантажний", "YD": "Електромобіль", "JF": "Мотоцикл", "НА": "Легковий, вантажний", "НК": "Легковий, вантажний", "ТВ": "Легковий, вантажний", "АС": "Легковий, вантажний", "ZА": "Електромобіль", "ВІ": "Легковий, вантажний", "РТ": "Легковий, вантажний", "ХJ": "Причіп", "РА": "Легковий, вантажний", "КЕ": "Легковий, вантажний", "НМ": "Легковий, вантажний", "JU": "Мотоцикл", "СС": "Легковий, вантажний", "YК": "Електромобіль", "ХL": "Причіп", "ВХ": "Легковий, вантажний", "МО": "Легковий, вантажний", "ТН": "Легковий, вантажний", "FN": "Причіп", "ХС": "Легковий, вантажний", "JС": "Мотоцикл", "YS": "Електромобіль", "ZG": "Електромобіль", "КМ": "Легковий, вантажний", "YJ": "Електромобіль", "ВВ": "Легковий, вантажний", "МВ": "Легковий, вантажний", "ІХ": "Легковий, вантажний", "ЕА": "Легковий, вантажний", "ХА": "Легковий, вантажний", "ZZ": "Електромобіль", "ЕТ": "Легковий, вантажний", "СН": "Легковий, вантажний", "ZЕ": "Електромобіль", "JD": "Мотоцикл", "НЕ": "Легковий, вантажний", "RА": "Електромотоцикл", "ІР": "Легковий, вантажний", "ІК": "Легковий, вантажний", "ВС": "Легковий, вантажний", "НТ": "Легковий, вантажний", "YY": "Електромобіль", "ЕВ": "Легковий, вантажний", "НО": "Легковий, вантажний", "ТА": "Легковий, вантажний", "АЕ": "Легковий, вантажний", "ZF": "Електромобіль", "КВ": "Легковий, вантажний", "СХ": "Легковий, вантажний", "YС": "Електромобіль", "ІС": "Легковий, вантажний", "АХ": "Легковий, вантажний", "UІ": "Електромобіль", "АН": "Легковий, вантажний", "ВМ": "Легковий, вантажний", "АВ": "Легковий, вантажний", "JS": "Мотоцикл", "ОО": "Легковий, вантажний", "FR": "Причіп", "ХF": "Причіп", "YО": "Електромобіль", "РС": "Легковий, вантажний", "ОТ": "Легковий, вантажний", "YВ": "Електромобіль", "YU": "Електромобіль", "ХІ": "Легковий, вантажний", "ЕР": "Легковий, вантажний", "ХU": "Причіп", "КН": "Легковий, вантажний", "ХS": "Причіп", "JJ": "Мотоцикл", "FJ": "Причіп", "ХВ": "Легковий, вантажний", "ОХ": "Легковий, вантажний", "ЕМ": "Легковий, вантажний", "ХV": "Причіп", "РІ": "Легковий, вантажний", "РН": "Легковий, вантажний", "ZD": "Електромобіль", "YF": "Електромобіль", "UG": "Електромобіль", "СО": "Легковий, вантажний", "FS": "Причіп", "ТР": "Легковий, вантажний", "UН": "Електромобіль", "КК": "Легковий, вантажний", "ZС": "Електромобіль", "YN": "Електромобіль", "JВ": "Мотоцикл", "МА": "Легковий, вантажний", "UF": "Електромобіль", "КС": "Легковий, вантажний", "YР": "Електромобіль", "АР": "Легковий, вантажний", "КА": "Легковий, вантажний", "ТК": "Легковий, вантажний", "FG": "Причіп", "YТ": "Електромобіль", "СМ": "Легковий, вантажний", "МІ": "Легковий, вантажний", "ХЕ": "Легковий, вантажний", "ВК": "Легковий, вантажний", "НР": "Легковий, вантажний", "ХN": "Причіп", "ВН": "Легковий, вантажний", "СР": "Легковий, вантажний", "LR": "Мотоцикл", "АТ": "Легковий, вантажний", "ІО": "Легковий, вантажний", "ZВ": "Електромобіль", "ЕХ": "Легковий, вантажний", "РХ": "Легковий, вантажний", "ТО": "Легковий, вантажний", "FY": "Причіп", "СА": "Легковий, вантажний", "YL": "Електромобіль", "КТ": "Легковий, вантажний", "YG": "Електромобіль", "YR": "Електромобіль", "КР": "Легковий, вантажний", "НХ": "Легковий, вантажний", "СІ": "Легковий, вантажний", "ЕІ": "Легковий, вантажний", "JЕ": "Мотоцикл", "ІА": "Легковий, вантажний", "МХ": "Легковий, вантажний", "ОМ": "Легковий, вантажний", "ТЕ": "Легковий, вантажний", "LJ": "Мотоцикл", "ІІ": "Легковий, вантажний", "ІЕ": "Легковий, вантажний", "НВ": "Легковий, вантажний", "НС": "Легковий, вантажний", "YН": "Електромобіль", "ЕС": "Легковий, вантажний", "ЕК": "Легковий, вантажний", "YІ": "Електромобіль", "ОР": "Легковий, вантажний", "ХО": "Легковий, вантажний", "МС": "Легковий, вантажний", "YА": "Електромобіль", "ЕН": "Легковий, вантажний", "ВЕ": "Легковий, вантажний", "РК": "Легковий, вантажний", "FU": "Причіп", "РВ": "Легковий, вантажний", "ХТ": "Легковий, вантажний", "ЕО": "Легковий, вантажний", "РО": "Легковий, вантажний", "АК": "Легковий, вантажний", "ВО": "Легковий, вантажний", "РМ": "Легковий, вантажний", "ІТ": "Легковий, вантажний", "АІ": "Легковий, вантажний", "АА": "Мотоцикл", "КХ": "Легковий, вантажний", "ХН": "Легковий, вантажний", "YХ": "Електромобіль", "ІН": "Легковий, вантажний", "СВ": "Легковий, вантажний", "UJ": "Електромобіль", "КІ": "Легковий, вантажний", "ІМ": "Легковий, вантажний", "ХG": "Причіп", "КО": "Легковий, вантажний", "РЕ": "Легковий, вантажний", "СТ": "Легковий, вантажний", "МТ": "Легковий, вантажний", "АМ": "Легковий, вантажний", "ТС": "Легковий, вантажний", "LО": "Мотоцикл", "СК": "Легковий, вантажний", "ЕЕ": "Легковий, вантажний", "НН": "Легковий, вантажний", "АО": "Легковий, вантажний", "JА": "Мотоцикл", "МН": "Легковий, вантажний", "ХR": "Причіп", "YМ": "Електромобіль", "ТМ": "Легковий, вантажний", "ВТ": "Легковий, вантажний", "НІ": "Легковий, вантажний", "ТІ": "Легковий, вантажний", "МК": "Легковий, вантажний", "СЕ": "Легковий, вантажний", "ХМ": "Легковий, вантажний", "МР": "Легковий, вантажний", "ТХ": "Легковий, вантажний", "YЕ": "Електромобіль"}
+
+
+def _vtype(plate):
+    """Vehicle type from the plate series (last 2 letters). Exact DB map, then scheme rule."""
+    s = (plate or "")[-2:]
+    if s in SERIES_TYPE:
+        return SERIES_TYPE[s]
+    a, b = (s[:1], s[1:2])
+    if a == "F":
+        return "Причіп"
+    if a == "Х" and b in "FGJLNRSUV":  # Х (Cyrillic) + Latin second letter = trailer
+        return "Причіп"
+    if a in ("J", "L"):
+        return "Мотоцикл"
+    if a == "R":
+        return "Електромотоцикл"
+    if a in ("U", "Y", "Z"):
+        return "Електромобіль"
+    return "Легковий, вантажний"
+
+
 def _price(text):
     m = _PRICE_RE.search((text or "").replace(" ", ""))
     if not m:
@@ -96,9 +124,12 @@ def _parse_table(html, region):
         plate = tds[0].get_text(strip=True)
         if not plate or "Номерний" in plate:
             continue
-        # opendata columns: Номерний знак · Ціна · Місце (ТСЦ). Vehicle type not split → leave None.
-        rows.append({"plate_number": normalize_plate(plate), "price": _price(tds[1].get_text(strip=True)),
-                     "tsc": tds[2].get_text(strip=True) or None, "region": region, "vehicle_type": None})
+        # opendata columns: Номерний знак · Ціна · Місце (ТСЦ). Type not in the table → derive
+        # it from the series (last 2 letters) via _vtype, so 1 request/region is enough.
+        num = normalize_plate(plate)
+        rows.append({"plate_number": num, "price": _price(tds[1].get_text(strip=True)),
+                     "tsc": tds[2].get_text(strip=True) or None, "region": region,
+                     "vehicle_type": _vtype(num)})
     return rows
 
 
@@ -160,55 +191,48 @@ async def _scrape(region_names, proxy):
                     for n in STATE["order"]:
                         STATE["regions"].setdefault(n, {"status": "—", "time": "", "count": 0})
                 STATE["loaded"] = True
-            types = [(v, l) for v, l in await _options(page, "#type_venichle") if v != "all"]
             targets = region_names or [n for _, n in all_regions]
             for name in targets:
                 rv = STATE["values"].get(name)
                 if not rv:
                     continue
-                region_rows, ok_any, fail_any = [], False, False
-                # Iterate vehicle types to KEEP the type (opendata doesn't label type when "all").
-                for tv, tl in types:
-                    _log(f"Парсю {name} · {tl}…")
-                    try:
-                        await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
-                        await page.wait_for_selector("#region", timeout=15000)
-                        await page.select_option("#region", rv)
-                        await asyncio.sleep(random.uniform(0.4, 1.0))
-                        for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
-                            loc = page.locator(sel).first
-                            if await loc.count() > 0:
-                                try:
-                                    await loc.click(timeout=2500)
-                                    break
-                                except Exception:
-                                    pass
-                        await page.select_option("#tsc", "Весь регіон")
-                        await page.select_option("#type_venichle", tv)
-                        await asyncio.sleep(random.uniform(0.4, 1.0))
-                        async with page.expect_response(
-                            lambda r: r.request.method == "POST" and "check-leisure-license-plates" in r.url,
-                            timeout=45000) as ri:
-                            await page.locator("input[type=submit]").last.click(timeout=15000, no_wait_after=True)
-                        body = await (await ri.value).text()
-                        if "Номерний" not in body:
-                            raise RuntimeError("blocked / no table")
-                        rows = _parse_table(body, name)
-                        for r in rows:
-                            r["vehicle_type"] = tl
-                        region_rows.extend(rows)
-                        ok_any = True
-                    except Exception as exc:  # noqa: BLE001
-                        fail_any = True
-                        _log(f"{name}/{tl}: невдало ({exc})")
-                    await asyncio.sleep(random.uniform(0.8, 1.6))
-                with _lock:
-                    STATE["cache"][name] = region_rows
-                    STATE["regions"][name] = {
-                        "status": "ok" if ok_any and not fail_any else ("part" if ok_any else "fail"),
-                        "count": len(region_rows), "time": time.strftime("%d.%m.%Y %H:%M")}
-                _log(f"{name}: {len(region_rows)} номерів "
-                     f"{'✅' if ok_any and not fail_any else '⚠️' if ok_any else '❌'}")
+                _log(f"Парсю {name}…")
+                try:
+                    await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
+                    await page.wait_for_selector("#region", timeout=15000)
+                    await page.select_option("#region", rv)
+                    await asyncio.sleep(random.uniform(0.4, 1.0))
+                    for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
+                        loc = page.locator(sel).first
+                        if await loc.count() > 0:
+                            try:
+                                await loc.click(timeout=2500)
+                                break
+                            except Exception:
+                                pass
+                    # One request: whole region, all types. Type is recovered per-plate from series.
+                    await page.select_option("#tsc", "Весь регіон")
+                    await page.select_option("#type_venichle", "all")
+                    await asyncio.sleep(random.uniform(0.4, 1.0))
+                    async with page.expect_response(
+                        lambda r: r.request.method == "POST" and "check-leisure-license-plates" in r.url,
+                        timeout=45000) as ri:
+                        await page.locator("input[type=submit]").last.click(timeout=15000, no_wait_after=True)
+                    body = await (await ri.value).text()
+                    if "Номерний" not in body:
+                        raise RuntimeError("blocked / no table")
+                    rows = _parse_table(body, name)
+                    with _lock:
+                        STATE["cache"][name] = rows
+                        STATE["regions"][name] = {"status": "ok", "count": len(rows),
+                                                  "time": time.strftime("%d.%m.%Y %H:%M")}
+                    _log(f"{name}: {len(rows)} номерів ✅")
+                except Exception as exc:  # noqa: BLE001
+                    with _lock:
+                        STATE["regions"][name] = {"status": "fail", "count": 0,
+                                                  "time": time.strftime("%d.%m.%Y %H:%M")}
+                    _log(f"{name}: невдало ❌ ({exc})")
+                await asyncio.sleep(random.uniform(1.0, 2.0))
         finally:
             await browser.close()
 
@@ -237,9 +261,11 @@ def _send(region_names):
             rows = STATE["cache"].get(name) or []
         if not rows:
             continue
-        scopes = sorted({(r["region"], r.get("vehicle_type")) for r in rows})
+        # Region snapshot is complete (all types) → reconcile removals across every type, so a
+        # type that dropped to zero this scan also gets its vanished plates marked removed.
+        scopes = [[name, t] for t in ALL_TYPES]
         payload = json.dumps({"secret": INGEST_SECRET, "rows": rows,
-                              "ok_scopes": [list(s) for s in scopes]}).encode("utf-8")
+                              "ok_scopes": scopes}).encode("utf-8")
         req = urllib.request.Request(SERVER_URL.rstrip("/") + "/ingest", data=payload,
                                      headers={"Content-Type": "application/json"})
         try:
