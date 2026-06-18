@@ -360,8 +360,12 @@ async def collect(request: Request):
     ctype = request.headers.get("content-type", "")
     is_form = "application/json" not in ctype
     if is_form:
-        form = await request.form()
-        body = _json.loads(form.get("payload") or "{}")
+        # Parse x-www-form-urlencoded manually (avoids the python-multipart dependency).
+        from urllib.parse import parse_qs
+
+        raw = (await request.body()).decode("utf-8", "replace")
+        payload = (parse_qs(raw).get("payload") or ["{}"])[0]
+        body = _json.loads(payload)
     else:
         body = await request.json()
     if body.get("secret") != config.INGEST_SECRET:
