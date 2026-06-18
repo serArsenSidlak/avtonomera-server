@@ -133,6 +133,12 @@ CREATE TABLE IF NOT EXISTS feed_events (
 CREATE INDEX IF NOT EXISTS idx_feed_evt ON feed_events(event, created_at);
 
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+
+CREATE TABLE IF NOT EXISTS app_link (
+    code TEXT PRIMARY KEY, chat_id INTEGER, token TEXT, status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_applink_token ON app_link(token);
 """
 
 
@@ -970,6 +976,45 @@ async def delete_all_bots() -> int:
         await db.execute("DELETE FROM users WHERE is_bot=1")
         await db.commit()
         return cnt
+
+
+# ── app account linking (Telegram ↔ app) ──
+async def link_create(code: str, token: str) -> None:
+    """Start an app↔Telegram link (pending until the bot binds a chat_id)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO app_link (code, token, status, created_at) VALUES (?,?, 'pending', ?)",
+            (code, token, _now()),
+        )
+        await db.commit()
+
+
+async def link_bind(code: str, chat_id: int) -> bool:
+    """Bind a pending link code to a Telegram chat_id. Returns True if bound."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "UPDATE app_link SET chat_id=?, status='linked' WHERE code=? AND status='pending'",
+            (chat_id, code),
+        )
+        await db.commit()
+        return (cur.rowcount or 0) > 0
+
+
+async def link_status(code: str) -> Optional[Dict[str, Any]]:
+    """Status of a link code: {status, chat_id, token}."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        cur = await db.execute("SELECT status, chat_id, token FROM app_link WHERE code=?", (code,))
+        row = await cur.fetchone()
+        return dict(row) if row else None
+
+
+async def token_chat(token: str) -> Optional[int]:
+    """Resolve an app token to its linked chat_id (None if not linked)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute("SELECT chat_id FROM app_link WHERE token=? AND status='linked'", (token,))
+        row = await cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
 
 
 async def get_meta(key: str) -> Optional[str]:

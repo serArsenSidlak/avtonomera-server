@@ -329,8 +329,17 @@ async def on_start(message: Message, state: FSMContext, command: CommandObject) 
     if config.ADMIN_CHAT_ID and message.chat.id == config.ADMIN_CHAT_ID:
         if not db.is_pro(await db.get_user(message.chat.id)):
             await db.grant_pro(message.chat.id, 3650)
-    # Referral deep-link: /start ref_<referrer_id>
+    # App link deep-link: /start link_<code> — binds the mobile app to this Telegram account.
     payload = (command.args or "").strip()
+    if payload.startswith("link_"):
+        code = payload[5:]
+        ok = await db.link_bind(code, message.chat.id)
+        await message.answer(
+            "✅ Додаток привʼязано до твого акаунту! Обране й моніторинги тепер синхронізуються."
+            if ok else "🔗 Це посилання вже використане або застаріле."
+        )
+        # fall through to render the main screen below
+    # Referral deep-link: /start ref_<referrer_id>
     if payload.startswith("ref_"):
         try:
             referrer_id = int(payload[4:])

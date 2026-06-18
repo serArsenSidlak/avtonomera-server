@@ -289,6 +289,84 @@ async def stage(request: Request) -> dict:
     return {"staged": len(rows), "total": total}
 
 
+BOT_USERNAME = "nomer_na_avto_bot"
+
+
+async def _account(request: Request) -> int:
+    """Resolve the linked Telegram chat_id from the X-App-Token header (401 if not linked)."""
+    token = request.headers.get("x-app-token", "")
+    chat_id = await db.token_chat(token) if token else None
+    if not chat_id:
+        raise HTTPException(401, "not linked")
+    return int(chat_id)
+
+
+@app.post("/app/link/start")
+async def app_link_start() -> dict:
+    """Begin linking the app to a Telegram account: returns a code, token and a bot deep-link."""
+    import secrets
+    code = secrets.token_urlsafe(6)
+    token = secrets.token_urlsafe(24)
+    await db.link_create(code, token)
+    return {"code": code, "token": token,
+            "deep_link": f"https://t.me/{BOT_USERNAME}?start=link_{code}"}
+
+
+@app.get("/app/link/status")
+async def app_link_status(code: str) -> dict:
+    """Poll whether the link code has been confirmed in the bot."""
+    st = await db.link_status(code)
+    if not st:
+        return {"status": "unknown"}
+    return {"status": st.get("status"), "linked": st.get("status") == "linked"}
+
+
+@app.get("/app/me")
+async def app_me(request: Request) -> dict:
+    """Return the linked account + its synced favorites/monitorings counts."""
+    chat_id = await _account(request)
+    user = await db.get_user(chat_id)
+    return {
+        "chat_id": chat_id,
+        "username": (user or {}).get("username"),
+        "favorites": len(await db.list_favorites(chat_id)),
+        "monitorings": len(await db.list_hunts(chat_id)),
+    }
+
+
+@app.get("/app/favorites")
+async def app_favorites(request: Request) -> dict:
+    """List the account's favorite plate numbers (synced with the bot)."""
+    chat_id = await _account(request)
+    return {"items": await db.list_favorites(chat_id)}
+
+
+@app.post("/app/favorites/toggle")
+async def app_fav_toggle(request: Request) -> dict:
+    """Add/remove a plate from the account's favorites (synced with the bot)."""
+    chat_id = await _account(request)
+    body = await request.json()
+    plate = (body.get("plate") or "").strip()
+    if not plate:
+        raise HTTPException(400, "no plate")
+    if await db.is_favorite(chat_id, plate):
+        await db.remove_favorite(chat_id, plate)
+        return {"favorite": False}
+    await db.add_favorite(chat_id, plate)
+    return {"favorite": True}
+
+
+@app.get("/app/monitorings")
+async def app_monitorings(request: Request) -> dict:
+    """List the account's monitorings (hunts), synced with the bot."""
+    chat_id = await _account(request)
+    hunts = await db.list_hunts(chat_id)
+    return {"items": [
+        {"id": h.get("id"), "name": h.get("name") or h.get("pattern"),
+         "region": h.get("region"), "vehicle_type": h.get("vehicle_type")} for h in hunts
+    ]}
+
+
 def main() -> None:
     """Run the API server."""
     import uvicorn

@@ -184,6 +184,10 @@ CREATE TABLE IF NOT EXISTS feed_events (
     region TEXT, vehicle_type TEXT, event TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_feed_evt ON feed_events(event, created_at);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS app_link (
+    code TEXT PRIMARY KEY, chat_id BIGINT, token TEXT, status TEXT DEFAULT 'pending',
+    created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_applink_token ON app_link(token);
 """
 
 
@@ -884,6 +888,32 @@ async def delete_all_bots() -> int:
         await _exec(f"DELETE FROM {tbl} WHERE chat_id IN (SELECT chat_id FROM users WHERE is_bot=1)")
     await _exec("DELETE FROM users WHERE is_bot=1")
     return cnt
+
+
+# ── app account linking (Telegram ↔ app) ──
+async def link_create(code: str, token: str) -> None:
+    """Start an app↔Telegram link (status pending until the bot binds a chat_id)."""
+    await _exec("INSERT INTO app_link (code, token, status, created_at) VALUES (?,?, 'pending', ?) "
+                "ON CONFLICT (code) DO NOTHING", code, token, _now())
+
+
+async def link_bind(code: str, chat_id: int) -> bool:
+    """Bind a pending link code to a Telegram chat_id (called from the bot). True if bound."""
+    return await _fetchval(
+        "UPDATE app_link SET chat_id=?, status='linked' WHERE code=? AND status='pending' RETURNING code",
+        chat_id, code,
+    ) is not None
+
+
+async def link_status(code: str) -> Optional[Dict[str, Any]]:
+    """Status of a link code: {status, chat_id, token}."""
+    row = await _fetchrow("SELECT status, chat_id, token FROM app_link WHERE code=?", code)
+    return dict(row) if row else None
+
+
+async def token_chat(token: str) -> Optional[int]:
+    """Resolve an app token to its linked chat_id (None if not linked)."""
+    return await _fetchval("SELECT chat_id FROM app_link WHERE token=? AND status='linked'", token)
 
 
 async def get_meta(key: str) -> Optional[str]:
