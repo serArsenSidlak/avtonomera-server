@@ -250,14 +250,20 @@ var TY=@TYPES@;
 var LAT={'A':'А','B':'В','C':'С','E':'Е','H':'Н','I':'І','K':'К','M':'М','O':'О','P':'Р','T':'Т','X':'Х'};
 function norm(p){p=(p||'').replace(/[\\s-]/g,'').toUpperCase();var o='';for(var i=0;i<p.length;i++){o+=(LAT[p[i]]||p[i]);}return o;}
 function vt(p){var s=p.slice(-2);if(M[s])return M[s];var a=s.charAt(0),b=s.charAt(1);if(a==='F')return TY[2];if(a==='Х'&&'FGJLNRSUV'.indexOf(b)>=0)return TY[2];if(a==='J'||a==='L')return TY[3];if(a==='R')return TY[4];if(a==='U'||a==='Y'||a==='Z')return TY[1];return TY[0];}
-var tbl=null,tabs=document.getElementsByTagName('table');
-for(var i=0;i<tabs.length;i++){var h=tabs[i].querySelector('tr');if(h&&h.textContent.indexOf('Номерний')>=0){tbl=tabs[i];break;}}
-if(!tbl){alert('Не бачу таблицю з номерами. Спершу обери регіон + Весь регіон + тип і натисни ПЕРЕГЛЯНУТИ.');return;}
+function parseRows(root){
+var tbl=null,tabs=root.getElementsByTagName('table');
+for(var i=0;i<tabs.length;i++){var hd=tabs[i].querySelector('tr');if(hd&&hd.textContent.indexOf('Номерний')>=0){tbl=tabs[i];break;}}
+if(!tbl){return [];}
 var trs=tbl.querySelectorAll('tr'),rows=[];
 for(var j=1;j<trs.length;j++){var td=trs[j].querySelectorAll('td');if(td.length<3){continue;}var pl=td[0].textContent.trim();if(!pl||pl.indexOf('Номерний')>=0){continue;}var pm=td[1].textContent.replace(/\\s/g,'').match(/[0-9.,]+/);var pr=pm?parseFloat(pm[0].replace(',','.')):null;var n=norm(pl);rows.push({plate_number:n,price:pr,tsc:(td[2].textContent.trim()||null),vehicle_type:vt(n)});}
-if(!rows.length){alert('Таблиця порожня — немає номерів для відправки.');return;}
-var det='';var rsel=document.querySelector('#region');if(rsel&&rsel.selectedIndex>=0){det=rsel.options[rsel.selectedIndex].text.trim();}
-det=det.replace(/\\s*область$/i,'').trim();if(/київ/i.test(det)){det='м. Київ';}
+return rows;
+}
+function dedupe(rows){var seen={},out=[];for(var i=0;i<rows.length;i++){var k=rows[i].plate_number+'|'+(rows[i].tsc||'');if(seen[k]){continue;}seen[k]=1;out.push(rows[i]);}return out;}
+function detRegion(){var det='';var rsel=document.querySelector('#region');if(rsel&&rsel.selectedIndex>=0){det=rsel.options[rsel.selectedIndex].text.trim();}det=det.replace(/\\s*область$/i,'').trim();if(/київ/i.test(det)){det='м. Київ';}return det;}
+function show(rows){
+rows=dedupe(rows);
+if(!rows.length){alert('Не знайшов номерів. Спершу обери регіон + Весь регіон + тип і натисни ПЕРЕГЛЯНУТИ.');return;}
+var det=detRegion();
 var ov=document.createElement('div');ov.style.cssText='position:fixed;top:0;left:0;right:0;bottom:0;z-index:2147483647;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;font-family:-apple-system,sans-serif';
 var h='<div style="background:#fff;color:#111;border-radius:16px;padding:18px;width:330px;max-width:90%;box-shadow:0 10px 40px rgba(0,0,0,.35)">';
 h+='<div style="font-weight:700;font-size:17px;margin-bottom:8px">Відправити в базу</div>';
@@ -279,6 +285,20 @@ var data={secret:SEC,rows:rows,ok_scopes:sc};
 var m=document.getElementById('hscM');m.textContent='Відправляю…';
 fetch(SRV+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json();}).then(function(d){m.innerHTML='✅ Готово: нових '+(d['new']||0)+', знято '+(d.removed||0)+', всього '+(d.scraped||0)+'.';}).catch(function(){m.textContent='Відправляю резервним способом (відкриється вкладка)…';var f=document.createElement('form');f.method='POST';f.action=SRV+'/collect';f.target='_blank';var ip=document.createElement('input');ip.type='hidden';ip.name='payload';ip.value=JSON.stringify(data);f.appendChild(ip);document.body.appendChild(f);f.submit();});
 };
+}
+var ind=document.createElement('div');ind.textContent='Збираю повний список…';ind.style.cssText='position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:2147483647;background:#111;color:#fff;padding:10px 16px;border-radius:10px;font-family:-apple-system,sans-serif;font-size:14px';document.body.appendChild(ind);
+function fb(){ind.remove();show(parseRows(document));}
+var rs=document.querySelector('#region');var form=rs?rs.closest('form'):document.querySelector('form');
+if(!form){fb();return;}
+try{
+var fd=[];var els=form.querySelectorAll('input,select,textarea');
+for(var i=0;i<els.length;i++){var e=els[i];if(!e.name){continue;}if((e.type==='checkbox'||e.type==='radio')&&!e.checked){continue;}if(e.type==='submit'||e.type==='button'){continue;}fd.push(encodeURIComponent(e.name)+'='+encodeURIComponent(e.value));}
+var sb=form.querySelector('input[type=submit],button[type=submit]');if(sb&&sb.name){fd.push(encodeURIComponent(sb.name)+'='+encodeURIComponent(sb.value||''));}
+var body=fd.join('&');var act=form.getAttribute('action');if(!act){act=location.href;}var mth=(form.getAttribute('method')||'POST').toUpperCase();
+var url=act,opt={method:mth,credentials:'include'};
+if(mth==='GET'){url=act+(act.indexOf('?')>=0?'&':'?')+body;}else{opt.headers={'Content-Type':'application/x-www-form-urlencoded'};opt.body=body;}
+fetch(url,opt).then(function(r){return r.text();}).then(function(t){ind.remove();var doc=new DOMParser().parseFromString(t,'text/html');var rows=parseRows(doc);if(rows&&rows.length){show(rows);}else{show(parseRows(document));}}).catch(fb);
+}catch(e){fb();}
 }catch(e){alert('Помилка: '+e.message);}
 })();
 """
