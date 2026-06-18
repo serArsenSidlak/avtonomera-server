@@ -273,8 +273,8 @@ ov.innerHTML=h;document.body.appendChild(ov);
 document.getElementById('hscX').onclick=function(){ov.remove();};
 document.getElementById('hscGo').onclick=function(){
 var reg=document.getElementById('hscR').value;
-for(var i=0;i<rows.length;i++){rows[i].region=reg;}
-var sc=[];for(var t=0;t<TY.length;t++){sc.push([reg,TY[t]]);}
+var pr={};for(var i=0;i<rows.length;i++){rows[i].region=reg;pr[rows[i].vehicle_type]=(pr[rows[i].vehicle_type]||0)+1;}
+var sc=[];for(var key in pr){sc.push([reg,key]);}
 var data={secret:SEC,rows:rows,ok_scopes:sc};
 var m=document.getElementById('hscM');m.textContent='Відправляю…';
 fetch(SRV+'/collect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}).then(function(r){return r.json();}).then(function(d){m.innerHTML='✅ Готово: нових '+(d['new']||0)+', знято '+(d.removed||0)+', всього '+(d.scraped||0)+'.';}).catch(function(){m.textContent='Відправляю резервним способом (відкриється вкладка)…';var f=document.createElement('form');f.method='POST';f.action=SRV+'/collect';f.target='_blank';var ip=document.createElement('input');ip.type='hidden';ip.name='payload';ip.value=JSON.stringify(data);f.appendChild(ip);document.body.appendChild(f);f.submit();});
