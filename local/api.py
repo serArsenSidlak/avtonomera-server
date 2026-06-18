@@ -50,7 +50,7 @@ async def guard(request: Request, call_next):
 
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
-            and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collector"):
+            and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html", "/collector"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
