@@ -356,15 +356,84 @@ async def app_fav_toggle(request: Request) -> dict:
     return {"favorite": True}
 
 
+@app.post("/app/account/anon")
+async def app_account_anon() -> dict:
+    """Create an anonymous app account so the app works fully without any Telegram link."""
+    import secrets
+    token = secrets.token_urlsafe(24)
+    chat_id = -(3_000_000_000 + secrets.randbelow(1_000_000_000))  # synthetic, app-only namespace
+    await db.ensure_user(chat_id, None)
+    await db.create_anon_account(token, chat_id)
+    return {"token": token}
+
+
 @app.get("/app/monitorings")
 async def app_monitorings(request: Request) -> dict:
-    """List the account's monitorings (hunts), synced with the bot."""
+    """List the account's monitorings (hunts) with current match counts."""
     chat_id = await _account(request)
     hunts = await db.list_hunts(chat_id)
-    return {"items": [
-        {"id": h.get("id"), "name": h.get("name") or h.get("pattern"),
-         "region": h.get("region"), "vehicle_type": h.get("vehicle_type")} for h in hunts
-    ]}
+    out = []
+    for h in hunts:
+        out.append({
+            "id": h.get("id"), "name": h.get("name") or h.get("pattern"),
+            "region": h.get("region"), "vehicle_type": h.get("vehicle_type"),
+            "matches": await db.count_hunt_matches(h),
+        })
+    return {"items": out}
+
+
+@app.post("/app/monitorings/create")
+async def app_monitor_create(request: Request) -> dict:
+    """Create a monitoring in-app (independent of Telegram). Body: {query, region, vehicle_type}."""
+    from local.plate import to_search_like
+
+    chat_id = await _account(request)
+    body = await request.json()
+    q = (body.get("query") or "").strip().upper()
+    region = body.get("region") or None
+    vtype = body.get("vehicle_type") or None
+    fields = {"match_type": "filters", "region": region, "vehicle_type": vtype}
+    if q:
+        mode, pattern = to_search_like(q)
+        if mode == "digits":
+            if "_" in pattern:
+                fields["digits_mask"] = pattern
+            else:
+                fields["digits_exact"] = pattern
+        else:
+            from local.plate import normalize_plate
+            letters = normalize_plate(q)
+            import re
+            letters = re.sub(r"\d", "", letters)
+            if letters:
+                fields["letters_start"] = letters[:2]
+    label = q or ((region or "всі") + " · " + (vtype or "всі"))
+    fields["pattern"] = label
+    fields["name"] = label
+    hid = await db.add_hunt(chat_id, fields)
+    return {"id": hid, "matches": await db.count_hunt_matches(fields)}
+
+
+@app.post("/app/monitorings/delete")
+async def app_monitor_delete(request: Request) -> dict:
+    """Delete one of the account's monitorings."""
+    chat_id = await _account(request)
+    body = await request.json()
+    ok = await db.delete_hunt(chat_id, int(body.get("id")))
+    return {"deleted": ok}
+
+
+@app.post("/app/merge")
+async def app_merge(request: Request) -> dict:
+    """Merge an old (anonymous) account's data into the current one (on linking)."""
+    to_chat = await _account(request)
+    body = await request.json()
+    old_token = body.get("old_token") or ""
+    from_chat = await db.token_chat(old_token) if old_token else None
+    if from_chat and from_chat != to_chat:
+        await db.merge_account(from_chat, to_chat)
+        db.invalidate_cache()
+    return {"merged": bool(from_chat)}
 
 
 def main() -> None:

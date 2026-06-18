@@ -1017,6 +1017,31 @@ async def token_chat(token: str) -> Optional[int]:
         return int(row[0]) if row and row[0] is not None else None
 
 
+async def create_anon_account(token: str, chat_id: int) -> None:
+    """Create an anonymous app account (token already 'linked' to a synthetic chat_id)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO app_link (code, chat_id, token, status, created_at) "
+            "VALUES (?,?,?, 'linked', ?)", (token, chat_id, token, _now()),
+        )
+        await db.commit()
+
+
+async def merge_account(from_chat: int, to_chat: int) -> None:
+    """Move favorites + monitorings from one account into another (used when linking)."""
+    if from_chat == to_chat:
+        return
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        await db.execute(
+            "INSERT OR IGNORE INTO favorites (chat_id, plate_number, digits, region, created_at) "
+            "SELECT ?, plate_number, digits, region, created_at FROM favorites WHERE chat_id=?",
+            (to_chat, from_chat),
+        )
+        await db.execute("DELETE FROM favorites WHERE chat_id=?", (from_chat,))
+        await db.execute("UPDATE hunts SET chat_id=? WHERE chat_id=?", (to_chat, from_chat))
+        await db.commit()
+
+
 async def get_meta(key: str) -> Optional[str]:
     """Read a meta value, or None."""
     async with aiosqlite.connect(config.DB_PATH) as db:

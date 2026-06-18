@@ -916,6 +916,26 @@ async def token_chat(token: str) -> Optional[int]:
     return await _fetchval("SELECT chat_id FROM app_link WHERE token=? AND status='linked'", token)
 
 
+async def create_anon_account(token: str, chat_id: int) -> None:
+    """Create an anonymous app account (token already 'linked' to a synthetic chat_id)."""
+    await _exec("INSERT INTO app_link (code, chat_id, token, status, created_at) "
+                "VALUES (?,?,?, 'linked', ?) ON CONFLICT (code) DO NOTHING",
+                token, chat_id, token, _now())
+
+
+async def merge_account(from_chat: int, to_chat: int) -> None:
+    """Move favorites + monitorings from one account into another (used when linking)."""
+    if from_chat == to_chat:
+        return
+    await _exec(
+        "INSERT INTO favorites (chat_id, plate_number, digits, region, created_at) "
+        "SELECT ?, plate_number, digits, region, created_at FROM favorites WHERE chat_id=? "
+        "ON CONFLICT DO NOTHING", to_chat, from_chat,
+    )
+    await _exec("DELETE FROM favorites WHERE chat_id=?", from_chat)
+    await _exec("UPDATE hunts SET chat_id=? WHERE chat_id=?", to_chat, from_chat)
+
+
 async def get_meta(key: str) -> Optional[str]:
     """Read a meta value, or None."""
     return await _fetchval("SELECT value FROM meta WHERE key=?", key)
