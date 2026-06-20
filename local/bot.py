@@ -108,6 +108,7 @@ class Flow(StatesGroup):
     search = State()
     new_hunt = State()
     report = State()
+    acheck = State()
     admin_addadmin = State()
     admin_broadcast = State()
     admin_vip_user = State()
@@ -134,6 +135,8 @@ def kb_main() -> InlineKeyboardMarkup:
     # ── Головне: моніторинг номера ──
     b.button(text="🔔 Стежити за номером", callback_data="newhunt")
     b.button(text="🎯 Мої моніторинги", callback_data="myhunts")
+    # ── Перевірка авто ──
+    b.button(text="🚗 Перевірка авто", callback_data="acheck")
     # ── Пошук і добірки ──
     b.button(text="🔍 Пошук номера", callback_data="search")
     b.button(text="✨ Добірки", callback_data="cols")
@@ -146,8 +149,8 @@ def kb_main() -> InlineKeyboardMarkup:
     b.button(text="👥 Друзі", callback_data="ref")
     b.button(text="📊 Статистика", callback_data="stats")
     b.button(text="ℹ️ Довідка", callback_data="help")
-    # hero (1) · мої (1) · пошук+добірки (2) · стрічка+популярні (2) · обрані+тариф (2) · друзі+стата (2) · довідка (1)
-    b.adjust(1, 1, 2, 2, 2, 2, 1)
+    # hero (1) · мої (1) · перевірка (1) · пошук+добірки (2) · стрічка+популярні (2) · обрані+тариф (2) · друзі+стата (2) · довідка (1)
+    b.adjust(1, 1, 1, 2, 2, 2, 2, 1)
     return b.as_markup()
 
 
@@ -422,6 +425,114 @@ async def do_report(message: Message, state: FSMContext) -> None:
                 pass
     await show(message.bot, message.chat.id,
               "✅ Дякую! Повідомлення надіслано адміну.", kb_back())
+
+
+# ── AutoCheck (перевірка авто по реєстру МВС, база на ПК через тунель) ──
+async def _autocheck_query(query: str) -> dict:
+    """Look up a vehicle by plate or VIN via the registered PC-agent tunnel."""
+    import re as _re
+
+    import aiohttp
+
+    url = await db.get_meta("autocheck_url")
+    if not url:
+        return {"offline": True}
+    q = (query or "").strip().upper()
+    alnum = _re.sub(r"[^A-Z0-9]", "", q)
+    # VIN: лат. літери+цифри, ≥10 символів, без кирилиці. Інакше — номер.
+    is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q)
+    param, val = ("vin", alnum) if is_vin else ("plate", _re.sub(r"[\s\-]", "", q))
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{url}/lookup", params={param: val},
+                             headers={"x-secret": config.INGEST_SECRET},
+                             timeout=aiohttp.ClientTimeout(total=20)) as r:
+                return await r.json()
+    except Exception:  # noqa: BLE001
+        return {"offline": True}
+
+
+def _fmt_date(iso: Optional[str]) -> str:
+    """ISO YYYY-MM-DD → DD.MM.YYYY for display."""
+    if iso and len(iso) >= 10 and iso[4] == "-":
+        return f"{iso[8:10]}.{iso[5:7]}.{iso[:4]}"
+    return iso or "—"
+
+
+def _fmt_autocheck(d: dict, query: str) -> str:
+    """Render an AutoCheck lookup result."""
+    if d.get("offline"):
+        return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
+                "Спробуй пізніше.")
+    if not d.get("found"):
+        return (f"🔍 За запитом <b>{query}</b> у реєстрі МВС нічого не знайдено.\n\n"
+                "<i>Перевір правильність номера/VIN. У базі — операції з 2013 року.</i>")
+    v = d.get("vehicle") or {}
+    h = d.get("history") or []
+    title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
+    lines = [f"🚗 <b>{title}</b>"]
+    if v.get("make_year"):
+        lines.append(f"📅 Рік випуску: <b>{v['make_year']}</b>")
+    spec = []
+    if v.get("capacity"):
+        spec.append(f"{v['capacity']} см³")
+    if v.get("fuel"):
+        spec.append(str(v["fuel"]).lower())
+    if v.get("color"):
+        spec.append(str(v["color"]).lower())
+    if spec:
+        lines.append("⚙️ " + ", ".join(spec))
+    body = " · ".join(x for x in (v.get("kind"), v.get("body")) if x)
+    if body:
+        lines.append(f"🚙 {body}")
+    if v.get("vin"):
+        lines.append(f"🔑 VIN: <code>{v['vin']}</code>")
+    if v.get("plate"):
+        lines.append(f"🔢 Поточний номер: <b>{v['plate']}</b>")
+    if h:
+        lines.append(f"\n📋 <b>Історія реєстрацій</b> (всього {len(h)}):")
+        for r in h[-12:]:
+            op = (r.get("oper_name") or "").capitalize()
+            dep = r.get("dep") or ""
+            pl = r.get("plate") or ""
+            row = f"• {_fmt_date(r.get('d_reg'))}"
+            if pl:
+                row += f" — {pl}"
+            if op:
+                row += f" — {op}"
+            if dep:
+                row += f" ({dep})"
+            lines.append(row)
+        if len(h) > 12:
+            lines.append(f"…та ще {len(h) - 12} операцій")
+    lines.append("\n<i>Джерело: відкритий реєстр МВС (data.gov.ua), без персональних даних.</i>")
+    return "\n".join(lines)
+
+
+@dp.callback_query(F.data == "acheck")
+async def cb_acheck(cq: CallbackQuery, state: FSMContext) -> None:
+    """Start the AutoCheck flow — ask for a plate or VIN."""
+    await state.set_state(Flow.acheck)
+    await show(cq.message.bot, cq.message.chat.id,
+              "🚗 <b>Перевірка авто</b>\n\nНадішли <b>номер</b> (напр. АА1234ВН) або <b>VIN</b> — "
+              "покажу марку, модель, рік, обʼєм, паливо, колір та <b>історію реєстрацій</b> "
+              "з відкритого реєстру МВС.", kb_back())
+
+
+@dp.message(Flow.acheck)
+async def do_acheck(message: Message, state: FSMContext) -> None:
+    """Run an AutoCheck lookup for the user's plate/VIN and show the result."""
+    q = (message.text or "").strip()
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    await state.clear()
+    if not q:
+        await show(message.bot, message.chat.id, "Порожній запит. Спробуй ще раз.",
+                   kb_back([("🚗 Перевірити", "acheck")]))
+        return
+    await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
+    res = await _autocheck_query(q)
+    await show(message.bot, message.chat.id, _fmt_autocheck(res, q),
+               kb_back([("🚗 Перевірити ще", "acheck")]))
 
 
 @dp.callback_query(F.data == "menu")
