@@ -467,6 +467,7 @@ async def search_filtered(
     tsc: Optional[str] = None,
     vehicle_type: Optional[str] = None,
     letters_start: Optional[str] = None,
+    letters_end: Optional[str] = None,
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
     collection: Optional[str] = None,
@@ -494,6 +495,9 @@ async def search_filtered(
     if letters_start:
         where.append("p.letters_start = ?")
         params.append(letters_start)
+    if letters_end:
+        where.append("p.letters_end = ?")
+        params.append(letters_end)
     if vehicle_type:
         where.append("p.vehicle_type = ?")
         params.append(vehicle_type)
@@ -525,6 +529,7 @@ async def count_filtered(
     tsc: Optional[str] = None,
     vehicle_type: Optional[str] = None,
     letters_start: Optional[str] = None,
+    letters_end: Optional[str] = None,
     price_min: Optional[float] = None,
     price_max: Optional[float] = None,
     collection: Optional[str] = None,
@@ -550,6 +555,9 @@ async def count_filtered(
     if letters_start:
         where.append("letters_start = ?")
         params.append(letters_start)
+    if letters_end:
+        where.append("letters_end = ?")
+        params.append(letters_end)
     if vehicle_type:
         where.append("vehicle_type = ?")
         params.append(vehicle_type)
@@ -1342,6 +1350,9 @@ def _hunt_criteria(h: Dict[str, Any], alias: str = "") -> tuple:
         if h.get("letters_start"):
             where.append(f"{a}letters_start = ?")
             params.append(h["letters_start"])
+        if h.get("letters_end"):
+            where.append(f"{a}letters_end = ?")
+            params.append(h["letters_end"])
         if h.get("digits_exact"):
             where.append(f"{a}digits = ?")
             params.append(h["digits_exact"])
