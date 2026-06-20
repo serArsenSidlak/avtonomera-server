@@ -50,7 +50,8 @@ async def guard(request: Request, call_next):
 
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
-            and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html", "/collector"):
+            and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
+                             "/collector", "/autocheck/register"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -535,6 +536,52 @@ def _html_attr(s: str) -> str:
 
 def _html_text(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+@app.post("/autocheck/register")
+async def autocheck_register(request: Request) -> dict:
+    """The AutoCheck PC-agent registers its current Cloudflare tunnel URL here (secret-protected)."""
+    import datetime as dt
+
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "disabled (no secret configured)")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    url = (body.get("url") or "").strip().rstrip("/")
+    if not url.startswith("https://"):
+        raise HTTPException(400, "bad url")
+    await db.set_meta("autocheck_url", url)
+    await db.set_meta("autocheck_ts", dt.datetime.now(dt.timezone.utc).isoformat())
+    return {"ok": True, "url": url}
+
+
+@app.get("/autocheck/lookup")
+async def autocheck_lookup(plate: str = "", vin: str = ""):
+    """Proxy a vehicle lookup to the registered PC-agent tunnel (so app/bot use a stable URL).
+
+    Behind the app API key (middleware). Returns {found, vehicle, history} or {found:false}.
+    """
+    import asyncio
+    import json as _json
+    from urllib.parse import quote
+
+    url = await db.get_meta("autocheck_url")
+    if not url:
+        return {"found": False, "offline": True, "note": "AutoCheck-агент не підключений"}
+    q = f"plate={quote(plate)}" if plate else (f"vin={quote(vin)}" if vin else "")
+    if not q:
+        raise HTTPException(400, "plate or vin required")
+
+    def _call():
+        req = urllib.request.Request(f"{url}/lookup?{q}", headers={"x-secret": config.INGEST_SECRET})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return _json.loads(r.read().decode("utf-8"))
+
+    try:
+        return await asyncio.to_thread(_call)
+    except Exception as exc:  # noqa: BLE001
+        return {"found": False, "offline": True, "note": f"агент недоступний ({exc})"}
 
 
 @app.post("/stage")
