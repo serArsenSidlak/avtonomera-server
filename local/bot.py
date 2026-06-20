@@ -131,28 +131,25 @@ async def _adopt_screen(handler, event, data):
 
 # ── keyboards / screen management ─────────────────
 def kb_main() -> InlineKeyboardMarkup:
-    """Main menu — monitoring-first, with grouped secondary actions."""
+    """Main menu — 4 grouped categories (details inside each section)."""
     b = InlineKeyboardBuilder()
-    # ── Головне: моніторинг номера ──
-    b.button(text="🔔 Стежити за номером", callback_data="newhunt")
-    b.button(text="🎯 Мої моніторинги", callback_data="myhunts")
-    # ── Перевірка авто ──
+    b.button(text="🔍 Пошук", callback_data="m_search")
+    b.button(text="🔔 Моніторинг", callback_data="m_monitor")
     b.button(text="🚗 Перевірка авто", callback_data="acheck")
-    # ── Пошук і добірки ──
-    b.button(text="🔍 Пошук номера", callback_data="search")
-    b.button(text="🔤 Слово на номері", callback_data="wordsearch")
-    b.button(text="✨ Добірки", callback_data="cols")
-    # ── Що нового ──
-    b.button(text="📰 Нові / зниклі", callback_data="feed")
-    b.button(text="🔥 Популярні", callback_data="popular")
-    b.button(text="⭐ Обрані", callback_data="favs")
-    # ── Акаунт ──
-    b.button(text="💎 Тариф", callback_data="plan")
-    b.button(text="👥 Друзі", callback_data="ref")
-    b.button(text="📊 Статистика", callback_data="stats")
-    b.button(text="ℹ️ Довідка", callback_data="help")
-    # hero(1)·мої(1)·перевірка(1)·пошук+слово(2)·добірки+стрічка(2)·популярні+обрані(2)·тариф+друзі(2)·стата+довідка(2)
-    b.adjust(1, 1, 1, 2, 2, 2, 2, 2)
+    b.button(text="⚙️ Ще", callback_data="m_more")
+    b.adjust(2, 1, 1)
+    return b.as_markup()
+
+
+def _kb_submenu(items: list) -> InlineKeyboardMarkup:
+    """Build a section submenu keyboard (2 per row) + a back-to-menu button."""
+    b = InlineKeyboardBuilder()
+    for text, data in items:
+        b.button(text=text, callback_data=data)
+    b.button(text="⬅️ Меню", callback_data="menu")
+    n = len(items)
+    rows = [2] * (n // 2) + ([1] if n % 2 else []) + [1]
+    b.adjust(*rows)
     return b.as_markup()
 
 
@@ -581,6 +578,33 @@ async def do_word(message: Message, state: FSMContext) -> None:
     await state.clear()
     await _set_filters(state, {"mode": "search", "series": front, "series_end": back, "page": 0})
     await _finalize(message.bot, message.chat.id, state)
+
+
+@dp.callback_query(F.data == "m_search")
+async def cb_m_search(cq: CallbackQuery, state: FSMContext) -> None:
+    """Section: search."""
+    await state.clear()
+    await show(cq.message.bot, cq.message.chat.id, "🔍 <b>Пошук номера</b>\nОбери спосіб:",
+              _kb_submenu([("🔍 Пошук номера", "search"), ("🔤 Слово на номері", "wordsearch"),
+                           ("✨ Добірки", "cols"), ("🔥 Популярні", "popular")]))
+
+
+@dp.callback_query(F.data == "m_monitor")
+async def cb_m_monitor(cq: CallbackQuery, state: FSMContext) -> None:
+    """Section: monitoring."""
+    await state.clear()
+    await show(cq.message.bot, cq.message.chat.id, "🔔 <b>Моніторинг</b>",
+              _kb_submenu([("🔔 Стежити за номером", "newhunt"), ("🎯 Мої моніторинги", "myhunts"),
+                           ("📰 Нові / зниклі", "feed"), ("⭐ Обрані", "favs")]))
+
+
+@dp.callback_query(F.data == "m_more")
+async def cb_m_more(cq: CallbackQuery, state: FSMContext) -> None:
+    """Section: account / extras."""
+    await state.clear()
+    await show(cq.message.bot, cq.message.chat.id, "⚙️ <b>Ще</b>",
+              _kb_submenu([("💎 Тариф", "plan"), ("👥 Друзі", "ref"),
+                           ("📊 Статистика", "stats"), ("ℹ️ Довідка", "help")]))
 
 
 @dp.callback_query(F.data == "menu")
