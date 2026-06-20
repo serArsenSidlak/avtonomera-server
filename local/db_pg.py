@@ -482,6 +482,7 @@ async def tsc_for_region(region: str) -> List[Dict[str, Any]]:
 async def search_filtered(
     query: Optional[str] = None, region: Optional[str] = None, tsc: Optional[str] = None,
     vehicle_type: Optional[str] = None, letters_start: Optional[str] = None,
+    letters_end: Optional[str] = None,
     price_min: Optional[float] = None, price_max: Optional[float] = None,
     collection: Optional[str] = None, limit: int = 15, offset: int = 0, only_available: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -505,6 +506,9 @@ async def search_filtered(
     if letters_start:
         where.append("p.letters_start = ?")
         params.append(letters_start)
+    if letters_end:
+        where.append("p.letters_end = ?")
+        params.append(letters_end)
     if vehicle_type:
         where.append("p.vehicle_type = ?")
         params.append(vehicle_type)
@@ -530,6 +534,7 @@ async def search_filtered(
 async def count_filtered(
     query: Optional[str] = None, region: Optional[str] = None, tsc: Optional[str] = None,
     vehicle_type: Optional[str] = None, letters_start: Optional[str] = None,
+    letters_end: Optional[str] = None,
     price_min: Optional[float] = None, price_max: Optional[float] = None,
     collection: Optional[str] = None, only_available: bool = True,
 ) -> int:
@@ -553,6 +558,9 @@ async def count_filtered(
     if letters_start:
         where.append("letters_start = ?")
         params.append(letters_start)
+    if letters_end:
+        where.append("letters_end = ?")
+        params.append(letters_end)
     if vehicle_type:
         where.append("vehicle_type = ?")
         params.append(vehicle_type)
