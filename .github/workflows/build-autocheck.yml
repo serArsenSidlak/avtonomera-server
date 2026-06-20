@@ -1,0 +1,45 @@
+name: Build AutoCheck agent
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'autocheck/agent.py'
+      - '.github/workflows/build-autocheck.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install pyinstaller
+
+      - name: Inject config (server URL + secret)
+        shell: bash
+        run: |
+          cat > autocheck/autocheck_config.py <<CFG
+          SERVER_URL = "https://34.123.136.171.nip.io"
+          SECRET = "${{ secrets.INGEST_SECRET }}"
+          CFG
+
+      - name: Build exe
+        working-directory: autocheck
+        run: pyinstaller --onefile --name AutoCheckAgent agent.py
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: autocheck-latest
+          name: Автономера — AutoCheck agent (latest)
+          files: autocheck/dist/AutoCheckAgent.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
