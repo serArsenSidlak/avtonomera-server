@@ -109,6 +109,7 @@ class Flow(StatesGroup):
     new_hunt = State()
     report = State()
     acheck = State()
+    word = State()
     admin_addadmin = State()
     admin_broadcast = State()
     admin_vip_user = State()
@@ -139,6 +140,7 @@ def kb_main() -> InlineKeyboardMarkup:
     b.button(text="🚗 Перевірка авто", callback_data="acheck")
     # ── Пошук і добірки ──
     b.button(text="🔍 Пошук номера", callback_data="search")
+    b.button(text="🔤 Слово на номері", callback_data="wordsearch")
     b.button(text="✨ Добірки", callback_data="cols")
     # ── Що нового ──
     b.button(text="📰 Нові / зниклі", callback_data="feed")
@@ -149,8 +151,8 @@ def kb_main() -> InlineKeyboardMarkup:
     b.button(text="👥 Друзі", callback_data="ref")
     b.button(text="📊 Статистика", callback_data="stats")
     b.button(text="ℹ️ Довідка", callback_data="help")
-    # hero (1) · мої (1) · перевірка (1) · пошук+добірки (2) · стрічка+популярні (2) · обрані+тариф (2) · друзі+стата (2) · довідка (1)
-    b.adjust(1, 1, 1, 2, 2, 2, 2, 1)
+    # hero(1)·мої(1)·перевірка(1)·пошук+слово(2)·добірки+стрічка(2)·популярні+обрані(2)·тариф+друзі(2)·стата+довідка(2)
+    b.adjust(1, 1, 1, 2, 2, 2, 2, 2)
     return b.as_markup()
 
 
@@ -213,12 +215,22 @@ def _price_label(f: dict) -> str:
     return f"до {fmt(hi)} грн"
 
 
+def _series_label(f: dict) -> str:
+    """Breadcrumb label for the letter filter (front and/or back letters)."""
+    s, e = f.get("series"), f.get("series_end")
+    if s and e:
+        return f"{s}****{e}"
+    if e:
+        return f"****{e}"
+    return s or "всі серії"
+
+
 def _summary(f: dict) -> str:
     """One-line breadcrumb of chosen filters so far."""
     parts = [
         f"🚗 {f.get('vtype') or 'всі'}",
         f"🌍 {f.get('region') or 'всі'}",
-        f"🔤 {f.get('series') or 'всі серії'}",
+        f"🔤 {_series_label(f)}",
         f"💰 {_price_label(f)}",
     ]
     if f.get("query"):
@@ -533,6 +545,42 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
     res = await _autocheck_query(q)
     await show(message.bot, message.chat.id, _fmt_autocheck(res, q),
                kb_back([("🚗 Перевірити ще", "acheck")]))
+
+
+# ── Слово на номері (пошук по перших + останніх літерах) ──
+_WORD_LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "I": "І",
+                               "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
+
+
+@dp.callback_query(F.data == "wordsearch")
+async def cb_wordsearch(cq: CallbackQuery, state: FSMContext) -> None:
+    """Start the word/combination search — first 2 + last 2 letters forming a word."""
+    await state.set_state(Flow.word)
+    await show(cq.message.bot, cq.message.chat.id,
+              "🔤 <b>Слово на номері</b>\n\nНадішли 2 перші + 2 останні літери, що складають слово — "
+              "напр. <b>СЕ****КС</b>, <b>ВО****РР</b> (або просто <code>СЕКС</code>).\n\n"
+              "Перші 2 літери — код регіону, останні 2 — серія. Покажу всі доступні номери; "
+              "якщо таких ще нема — зможеш поставити моніторинг наперед.", kb_back())
+
+
+@dp.message(Flow.word)
+async def do_word(message: Message, state: FSMContext) -> None:
+    """Parse front+back letters and run a combination search (reuses the results renderer)."""
+    import re as _re
+
+    raw = message.text or ""
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    letters = _re.sub(r"[^A-Za-zА-Яа-яІЇЄҐіїєґ]", "", raw).upper().translate(_WORD_LAT2CYR)
+    if len(letters) < 4:
+        await state.clear()
+        await show(message.bot, message.chat.id,
+                  "✋ Треба щонайменше 4 літери: 2 перші + 2 останні (напр. СЕКС або СЕ****КС).",
+                  kb_back([("🔤 Спробувати ще", "wordsearch")]))
+        return
+    front, back = letters[:2], letters[-2:]
+    await state.clear()
+    await _set_filters(state, {"mode": "search", "series": front, "series_end": back, "page": 0})
+    await _finalize(message.bot, message.chat.id, state)
 
 
 @dp.callback_query(F.data == "menu")
@@ -1195,6 +1243,7 @@ def _kw(f: dict) -> dict:
     """Build the filter kwargs shared by search_filtered / count_filtered."""
     return dict(
         query=f.get("query"), region=f.get("region"), letters_start=f.get("series"),
+        letters_end=f.get("series_end"),
         vehicle_type=f.get("vtype"), price_min=f.get("price_min"), price_max=f.get("price_max"),
         collection=f.get("collection"),
     )
@@ -1471,6 +1520,7 @@ async def _save_hunt_from_filters(bot: Bot, chat_id: int, state: FSMContext) -> 
     h: dict = {
         "match_type": "filters",
         "letters_start": f.get("series"),
+        "letters_end": f.get("series_end"),
         "region": f.get("region"),
         "vehicle_type": f.get("vtype"),
         "price_min": f.get("price_min"),
@@ -1485,7 +1535,11 @@ async def _save_hunt_from_filters(bot: Bot, chat_id: int, state: FSMContext) -> 
             else:
                 h["digits_exact"] = pattern
     digits_label = h.get("digits_exact") or (h.get("digits_mask", "").replace("_", "*"))
-    label = (h.get("letters_start") or "") + (digits_label or "")
+    le = h.get("letters_end") or ""
+    if le:  # word/combination hunt: front + (digits|****) + back
+        label = (h.get("letters_start") or "") + (digits_label or "****") + le
+    else:
+        label = (h.get("letters_start") or "") + (digits_label or "")
     h["pattern"] = label or "будь-який"
     h["name"] = h["pattern"]
     await db.ensure_user(chat_id, None)
