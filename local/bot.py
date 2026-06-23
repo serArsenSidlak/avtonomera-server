@@ -1959,7 +1959,8 @@ async def cb_a_stats(cq: CallbackQuery) -> None:
     last = (await db.get_stats()).get("last_scan") or "—"
     text = (
         "📊 <b>Адмін-статистика</b>\n\n"
-        f"👥 Користувачів: <b>{s['users']}</b> (PRO: {s['pro_users']}) · 🤖 ботів: {s.get('bots', 0)}\n"
+        f"👥 Усього: <b>{s['users'] + s.get('bots', 0)}</b> "
+        f"(люди: {s['users']} · PRO: {s['pro_users']} · боти: {s.get('bots', 0)})\n"
         f"🎯 Моніторингів: <b>{s['hunts']}</b>\n"
         f"⭐ В обраному: <b>{s['favorites']}</b>\n"
         f"🚗 Номерів у базі: <b>{s['plates']:,}</b>".replace(",", " ") + "\n"
