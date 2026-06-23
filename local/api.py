@@ -337,21 +337,54 @@ def _plate_norm(raw: str) -> str:
     return _re.sub(r"[\s\-]", "", raw or "").strip().upper().translate(_PLATE_LAT2CYR)
 
 
+# Додаток 5 (офіційний наказ МВС) — серія (КІНЦЕВІ 2 літери) → тип ТЗ. Блоки дослівно з наказу;
+# нормалізуємо латиницю→кирилицю під формат нашої бази. Покриває всі 356 офіційних комбо.
+_D5_BLOCKS = {
+    "Легковий, вантажний": (
+        "ААВАСАЕАНАІА КАМАРАТАХАОО АВВВСВЕВНВ ІВ КВМВРВ ТВХВОР АСВСССЕСНС ІС КСМСРС ТСХСОТ "
+        "АЕ ВЕ СЕ ЕЕ НЕ ІЕ КЕМЕРЕ ТЕ ХЕОХ АНВНСНЕНННІН КНМНРНТНХН АІ ВІ СІ ЕІ НІ ІІ КІ МІ РІ ТІ ХІ "
+        "АКВКСКЕКНК ІК ККМКРК ТКХК АМВМСМЕМНМІМКМММРМТМХМ АОВОСОЕОНОІО КОМОРОТОХО "
+        "АР ВР СР ЕР НР ІР КР МР РР ТР ХР АТВТ СТ ЕТ НТ ІТ КТМТРТ ТТ ХТ АХВХСХЕХНХІХ КХМХРХТХХХ "
+        "ОА ОВ ОС ОЕ ОН ОІ ОК ОМ"),
+    "Причіп": "XFXGXJXLXNXRXSXUXVXYXZ FF FR FSFUFVFYFZ СFСGСJ СLСNСRСSСUСY FG FJ FL FN",
+    "Електромобіль": (
+        "UAUFUGUHUIUJUKULUMUNUOUP URUSUTUUUХUY QAQBQCQDQEQFQGQHQIQJQKQL QMQNQOQPQQQRQSQTQUQХQY "
+        "ZAZBZCZDZEZFZGZHZI ZJZKZL ZMZNZOZPZRZSZTZUZVZXZYZZ YAYBYCYDYEYFYGYHYIYJYKYL "
+        "YMYNYOYPYRYSYTYUYVYXYYYZ UB UC UD UE"),
+    "Мотоцикл": ("JAJBJCJDJE JFJGJH JI JJ JKJL JMJNJOJPJRJS JTJUJVJXJYJZ "
+                 "LELFLGLHLI LJLKLLLMLNLOLP LRLSLTLULVLXLYLZ"),
+    "Електромотоцикл": ("RARFRGRHRIRJRKRLRMRNRORP RRRSRTRURVRXRYRZ "
+                        "SASBSCSDSESFSGSHSI SJSKSL SMSNSOSPSRSSSTSUSVSXSYSZ"),
+}
+
+
+def _build_official_series() -> dict:
+    m = {}
+    for vt, block in _D5_BLOCKS.items():
+        letters = _re.sub(r"\s+", "", block)
+        for i in range(0, len(letters) - 1, 2):
+            m[letters[i:i + 2].translate(_PLATE_LAT2CYR)] = vt
+    return m
+
+
+OFFICIAL_SERIES = _build_official_series()
+
+
 def _vtype_server(plate: str, smap: dict) -> str:
-    """Vehicle type from plate series (last 2 letters): exact DB map, then scheme rule (Додаток 5)."""
+    """Vehicle type from the series (last 2 letters) — офіційний Додаток 5, потім запасне правило."""
     s = plate[-2:]
-    if s in smap:
+    if s in OFFICIAL_SERIES:
+        return OFFICIAL_SERIES[s]
+    if s in (smap or {}):
         return smap[s]
     a, b = s[:1], s[1:2]
-    if a == "F":
-        return "Причіп"
-    if a == "Х" and b in "FGJLNRSUV":
+    if a == "F" or (a == "Х" and b in "FGJLNRSUV") or (a == "С" and b in "FGJLNRSUVY"):
         return "Причіп"
     if a in ("J", "L"):
         return "Мотоцикл"
-    if a == "R":
+    if a in ("R", "S"):
         return "Електромотоцикл"
-    if a in ("U", "Y", "Z"):
+    if a in ("U", "Y", "Z", "Q"):
         return "Електромобіль"
     return "Легковий, вантажний"
 
