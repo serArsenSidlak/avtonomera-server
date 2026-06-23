@@ -53,7 +53,7 @@ _screens: Dict[int, int] = {}
 # Filled at startup from get_me(), used to build referral deep-links.
 BOT_USERNAME = "nomer_na_avto_bot"
 
-STEP_ORDER = ["type", "region", "series", "price", "combo"]
+STEP_ORDER = ["type", "region", "series", "endseries", "price", "combo"]
 
 # Official region letter-pairs (Додаток 4 до Вимог до НЗ, МВС) — Cyrillic. These are ALL the
 # series a region can have, so a user can monitor a series even before any plate is available.
@@ -123,6 +123,7 @@ class Flow(StatesGroup):
     report = State()
     acheck = State()
     word = State()
+    endseries = State()
     admin_addadmin = State()
     admin_broadcast = State()
     admin_vip_user = State()
@@ -564,13 +565,40 @@ _WORD_LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": 
 
 @dp.callback_query(F.data == "wordsearch")
 async def cb_wordsearch(cq: CallbackQuery, state: FSMContext) -> None:
-    """Start the word/combination search — first 2 + last 2 letters forming a word."""
+    """Entry for «Слово на номері» — choose step-by-step builder or free-text mask."""
+    await state.set_state(None)
+    b = InlineKeyboardBuilder()
+    b.button(text="📋 Зібрати покроково", callback_data="word_wizard")
+    b.button(text="✍️ Написати маску", callback_data="word_type")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    b.adjust(1)
+    await show(cq.message.bot, cq.message.chat.id,
+              "🔤 <b>Слово на номері</b>\n\nСклади номер-слово: перші літери (регіон) + останні (серія).\n\n"
+              "• <b>Зібрати покроково</b> — тип → регіон → код регіону → серія (обираєш кнопками)\n"
+              "• <b>Написати маску</b> — напр. <code>СЕ****КС</code> або <code>СЕКС</code>",
+              b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "word_wizard")
+async def cb_word_wizard(cq: CallbackQuery, state: FSMContext) -> None:
+    """Step-by-step word builder — reuse the search wizard (type→region→код→серія→…)."""
+    await state.set_state(Flow.search)
+    await _set_filters(state, {"mode": "search"})
+    await render_step(cq.message.bot, cq.message.chat.id, state, "type")
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "word_type")
+async def cb_word_type(cq: CallbackQuery, state: FSMContext) -> None:
+    """Free-text mask entry for the word search."""
     await state.set_state(Flow.word)
     await show(cq.message.bot, cq.message.chat.id,
-              "🔤 <b>Слово на номері</b>\n\nНадішли 2 перші + 2 останні літери, що складають слово — "
+              "✍️ <b>Слово на номері</b>\n\nНадішли 2 перші + 2 останні літери, що складають слово — "
               "напр. <b>СЕ****КС</b>, <b>ВО****РР</b> (або просто <code>СЕКС</code>).\n\n"
-              "Перші 2 літери — код регіону, останні 2 — серія. Покажу всі доступні номери; "
-              "якщо таких ще нема — зможеш поставити моніторинг наперед.", kb_back())
+              "Перші 2 — код регіону, останні 2 — серія. Покажу доступні; якщо нема — можна "
+              "поставити моніторинг наперед.", kb_back())
+    await cq.answer()
 
 
 @dp.message(Flow.word)
@@ -1097,7 +1125,8 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         head = f"✨ <b>{title}</b> · крок {n}/2\n🚗 {f.get('vtype') or '—'}\n\n"
     else:
         title = "Новий моніторинг" if mode == "hunt" else "Пошук"
-        head = f"{'➕' if mode == 'hunt' else '🔍'} <b>{title}</b> · крок {n}/5\n<i>{_summary(f)}</i>\n\n"
+        head = (f"{'➕' if mode == 'hunt' else '🔍'} <b>{title}</b> · крок {n}/{len(STEP_ORDER)}\n"
+                f"<i>{_summary(f)}</i>\n\n")
     b = InlineKeyboardBuilder()
 
     if step == "type":
@@ -1130,8 +1159,7 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         for p in prices:
             label = f"{int(p):,} грн".replace(",", " ")
             b.button(text=label, callback_data=f"setpf:{int(p)}")
-        # Back goes to series only when a concrete region was chosen (series step exists then).
-        b.button(text="⬅️ Назад", callback_data="step:series" if f.get("region") else "step:region")
+        b.button(text="⬅️ Назад", callback_data="step:endseries")
         b.button(text="➡️ Далі", callback_data="setpf:__all__")
         b.button(text="⬅️ Меню", callback_data="menu")
         rows = [1] + [2] * ((len(prices) + 1) // 2) + [2, 1]
@@ -1141,8 +1169,8 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
 
     elif step == "series":
         region = f.get("region")
-        if not region:  # series are region-specific → skip this step for "all regions"
-            await render_step(bot, chat_id, state, "price")
+        if not region:  # код регіону region-specific → skip to the ending-series step
+            await render_step(bot, chat_id, state, "endseries")
             return
         available = set(await db.distinct_series(region=region, vehicle_type=f.get("vtype")))
         official = _region_series(region)
@@ -1150,7 +1178,7 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         ordered = official + [s for s in sorted(available) if s not in official]
         if not ordered:
             ordered = sorted(available)
-        b.button(text="✅ Без фільтру по серії", callback_data="sets:__all__")
+        b.button(text="✅ Будь-який код регіону", callback_data="sets:__all__")
         for s in ordered:
             mark = "" if s in available else " 🔔"  # 🔔 = немає зараз → лише моніторинг
             b.button(text=f"{s}{mark}", callback_data=f"sets:{s}")
@@ -1159,8 +1187,26 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
         b.button(text="⬅️ Меню", callback_data="menu")
         rows = [1] + [3] * ((len(ordered) + 2) // 3) + [2, 1]
         b.adjust(*rows)
-        note = ("🔤 Обери <b>серію</b> регіону (🔔 — поки немає в продажу, можна поставити моніторинг):"
-                if ordered else "🔤 Серій не знайдено")
+        note = ("🔤 Обери <b>код регіону</b> (перші 2 літери; 🔔 — поки немає в продажу, можна "
+                "поставити моніторинг):" if ordered else "🔤 Кодів не знайдено")
+        await show(bot, chat_id, head + note, b.as_markup())
+
+    elif step == "endseries":
+        region = f.get("region")
+        ends = await db.distinct_series_end(
+            region=region, vehicle_type=f.get("vtype"), letters_start=f.get("series"))
+        b.button(text="✅ Будь-яка серія", callback_data="sete:__all__")
+        for s in ends:
+            b.button(text=s, callback_data=f"sete:{s}")
+        b.button(text="⌨️ Ввести свою", callback_data="sete:__type__")
+        b.button(text="⬅️ Назад", callback_data="step:series" if region else "step:region")
+        b.button(text="➡️ Далі", callback_data="sete:__all__")
+        b.button(text="⬅️ Меню", callback_data="menu")
+        rows = [1] + [3] * ((len(ends) + 2) // 3) + [1, 2, 1]
+        b.adjust(*rows)
+        note = ("🔡 Обери <b>серію</b> — останні 2 літери (щоб скласти слово на номері), "
+                "або введи свою:" if ends
+                else "🔡 Готових серій нема — натисни «⌨️ Ввести свою», щоб задати останні 2 літери:")
         await show(bot, chat_id, head + note, b.as_markup())
 
     elif step == "combo":
@@ -1174,7 +1220,7 @@ async def render_step(bot: Bot, chat_id: int, state: FSMContext, step: str) -> N
             "<code>-</code>/<code>*</code> = будь-яка цифра"
         )
         b.button(text=skip_label, callback_data="s_skip")
-        b.button(text="⬅️ Назад", callback_data="step:series")
+        b.button(text="⬅️ Назад", callback_data="step:price")
         b.button(text="⬅️ Меню", callback_data="menu")
         b.adjust(1)
         await show(bot, chat_id, text, b.as_markup())
@@ -1219,6 +1265,7 @@ async def cb_set_region(cq: CallbackQuery, state: FSMContext) -> None:
     f = await _filters(state)
     f["region"] = None if value == "__all__" else value
     f["series"] = None
+    f["series_end"] = None
     await _set_filters(state, f)
     if f.get("mode") == "collection":
         # Collections only filter by type + region → straight to results.
@@ -1226,22 +1273,61 @@ async def cb_set_region(cq: CallbackQuery, state: FSMContext) -> None:
         await _set_filters(state, f)
         await render_results(cq.message.bot, cq.message.chat.id, state)
     elif f.get("region"):
-        # Series are region-specific → only offer the series step for a concrete region.
+        # Код регіону region-specific → offer it for a concrete region.
         await render_step(cq.message.bot, cq.message.chat.id, state, "series")
     else:
-        await render_step(cq.message.bot, cq.message.chat.id, state, "price")
+        await render_step(cq.message.bot, cq.message.chat.id, state, "endseries")
     await cq.answer()
 
 
 @dp.callback_query(F.data.startswith("sets:"))
 async def cb_set_series(cq: CallbackQuery, state: FSMContext) -> None:
-    """Pick a letter series → advance to price."""
+    """Pick a region code (first letters) → advance to the ending-series step."""
     value = cq.data.split(":", 1)[1]
     f = await _filters(state)
     f["series"] = None if value == "__all__" else value
     await _set_filters(state, f)
+    await render_step(cq.message.bot, cq.message.chat.id, state, "endseries")
+    await cq.answer()
+
+
+@dp.callback_query(F.data.startswith("sete:"))
+async def cb_set_endseries(cq: CallbackQuery, state: FSMContext) -> None:
+    """Pick the ending series (last letters) → advance to price; or prompt to type it."""
+    value = cq.data.split(":", 1)[1]
+    f = await _filters(state)
+    if value == "__type__":
+        await state.set_state(Flow.endseries)
+        await show(cq.message.bot, cq.message.chat.id,
+                  "⌨️ Надішли <b>2 останні літери</b> серії (напр. <code>КС</code>):",
+                  kb_back([("⬅️ Назад", "step:endseries")]))
+        await cq.answer()
+        return
+    f["series_end"] = None if value == "__all__" else value
+    await _set_filters(state, f)
     await render_step(cq.message.bot, cq.message.chat.id, state, "price")
     await cq.answer()
+
+
+@dp.message(Flow.endseries)
+async def do_endseries_text(message: Message, state: FSMContext) -> None:
+    """Capture a typed ending series (2 letters) → continue the wizard."""
+    import re as _re
+
+    raw = message.text or ""
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    letters = _re.sub(r"[^A-Za-zА-Яа-яІЇЄҐіїєґ]", "", raw).upper().translate(_WORD_LAT2CYR)
+    if len(letters) < 2:
+        # stay in endseries state so the next message retries
+        await show(message.bot, message.chat.id,
+                   "✋ Треба рівно 2 літери (напр. КС). Надішли ще раз:",
+                   kb_back([("⬅️ Назад", "step:endseries")]))
+        return
+    f = await _filters(state)
+    f["series_end"] = letters[-2:]
+    await _set_filters(state, f)
+    await state.set_state(Flow.search)
+    await render_step(message.bot, message.chat.id, state, "price")
 
 
 @dp.callback_query(F.data.startswith("setpf:"))
