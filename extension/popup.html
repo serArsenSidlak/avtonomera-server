@@ -1,11 +1,27 @@
 <!doctype html><html lang="uk"><head><meta charset="utf-8">
-<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:320px;padding:14px;background:#0f1115;color:#eef1f6}
-h3{margin:0 0 6px}button{display:block;width:100%;margin:8px 0;padding:12px;border:0;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;color:#fff;background:#16a34a}
-#status{margin-top:10px;padding:10px;background:#1b1f27;border-radius:8px;font-size:13px;white-space:pre-wrap;min-height:34px}small{color:#9aa4b2}</style>
-</head><body>
-<h3>🚗 Автономера — авто-збирач</h3>
-<small>Авто-збір кожні 3 год (поки браузер відкритий і ти залогінений на e-driver). Дані йдуть у чергу — адмін підтверджує оновлення в боті.</small>
-<button id="go">▶️ Зібрати зараз</button>
-<div id="status">—</div>
+<style>
+body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;width:360px;padding:14px;background:#0f1115;color:#eef1f6;margin:0}
+h3{margin:0 0 4px}small{color:#9aa4b2}
+button{border:0;border-radius:9px;font-weight:700;cursor:pointer;color:#fff;padding:9px 11px}
+.row{display:flex;gap:6px;margin:8px 0}
+.row button{flex:1}
+.g{background:#16a34a}.b{background:#3b82f6}.gray{background:#374151}
+#list{margin-top:10px;max-height:300px;overflow:auto}
+.item{background:#161a22;border:1px solid #232834;border-radius:10px;padding:8px 10px;margin:6px 0;font-size:13px;display:flex;align-items:center;gap:8px}
+.item .meta{flex:1}.item .reg{font-weight:700}.item .sub{color:#9aa4b2;font-size:12px}
+.item button{padding:7px 10px;font-size:13px}
+#total{margin-top:6px;font-size:13px;color:#9aa4b2}
+#log{margin-top:10px;padding:9px;background:#1b1f27;border-radius:8px;font-size:12px;white-space:pre-wrap;min-height:30px;color:#9be7a0}
+</style></head><body>
+<h3>🚗 Збирач opendata</h3>
+<small>Ходи по opendata.hsc.gov.ua вручну — номери ловляться самі. Потім експортуй або заливай у базу.</small>
+<div class="row">
+  <button class="g" id="sendAll">📤 Залити все в базу</button>
+  <button class="b" id="export">📥 CSV</button>
+  <button class="gray" id="clear">🗑</button>
+</div>
+<div id="total">—</div>
+<div id="list"></div>
+<div id="log"></div>
 <script src="popup.js"></script>
 </body></html>
