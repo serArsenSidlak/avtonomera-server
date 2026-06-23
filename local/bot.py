@@ -903,7 +903,7 @@ async def render_feed(bot: Bot, chat_id: int, state: FSMContext) -> None:
         b.button(text=f"{lab} ✅" if period == p else lab, callback_data=f"fp:{p}")
     b.button(text=f"🚗 {f.get('vtype') or 'тип'}", callback_data="f_type")
     b.button(text=f"🌍 {f.get('region') or 'регіон'}", callback_data="f_region")
-    b.button(text=f"🔎 Показати ({min(cnt, _PAGE)})", callback_data="f_show")
+    b.button(text=f"🔎 Показати ({min(cnt, _GRID)})", callback_data="f_show")
     b.button(text="⬅️ Меню", callback_data="menu")
     b.adjust(2, 3, 2, 1, 1)
     await show(bot, chat_id, text, b.as_markup())
@@ -1004,32 +1004,34 @@ async def render_feed_results(bot: Bot, chat_id: int, state: FSMContext) -> None
     f = await _filters(state)
     kind, period, page = f.get("feed_kind", "new"), f.get("feed_period", "day"), f.get("feed_page", 0)
     cnt = await db.feed_count(kind, period, f.get("region"), f.get("vtype"))
-    rows = await db.feed(kind, period, f.get("region"), f.get("vtype"), limit=_PAGE, offset=page * _PAGE)
+    rows = await db.feed(kind, period, f.get("region"), f.get("vtype"), limit=_GRID, offset=page * _GRID)
     kl = "🆕 Нові" if kind == "new" else "❌ Зниклі"
     if not rows:
         await show(bot, chat_id, f"📰 {kl} · {_PERIOD_LABEL[period]}\n\nНемає записів за цей період.",
                    kb_back([("📰 Стрічка", "feed")]))
         return
-    lines = [f"📰 <b>{kl}</b> · {_PERIOD_LABEL[period]} · {cnt}\n"]
-    for i, r in enumerate(rows):
-        when = _fmt_dt(r["event_at"])
-        lines.append(f"{page * _PAGE + i + 1}. <b>{r['plate_number']}</b> · {r['region']}\n    🕒 {when}")
+    pages_total = (cnt + _GRID - 1) // _GRID
+    text = (f"📰 <b>{kl}</b> · {_PERIOD_LABEL[period]} · {cnt} · стор. {page + 1}/{pages_total}\n\n"
+            "Обери номер 👇")
     b = InlineKeyboardBuilder()
-    b.button(text="🔎 Детальніше", callback_data="fd_details")
-    has_prev, has_next = page > 0, page * _PAGE + len(rows) < cnt
+    for r in rows:  # номери як кнопки, 3 в рядок → тап відкриває картку
+        b.button(text=r["plate_number"], callback_data=f"pdfeed:{r['plate_number']}")
+    has_prev, has_next = page > 0, page * _GRID + len(rows) < cnt
     if has_prev:
         b.button(text="◀️ Назад", callback_data="fpg:prev")
     if has_next:
         b.button(text="➡️ Далі", callback_data="fpg:next")
     b.button(text="📰 Фільтри стрічки", callback_data="feed_back")
     b.button(text="⬅️ Меню", callback_data="menu")
-    layout = [1]
+    layout = [3] * (len(rows) // 3)
+    if len(rows) % 3:
+        layout.append(len(rows) % 3)
     nav = int(has_prev) + int(has_next)
     if nav:
         layout.append(nav)
-    layout += [1, 1]
+    layout += [2]
     b.adjust(*layout)
-    await show(bot, chat_id, "\n".join(lines), b.as_markup())
+    await show(bot, chat_id, text, b.as_markup())
 
 
 @dp.callback_query(F.data == "f_show")
@@ -1366,6 +1368,7 @@ async def do_combo_text(message: Message, state: FSMContext) -> None:
 
 
 _PAGE = 15
+_GRID = 18  # номери як кнопки: 6 рядків × 3
 
 
 def _kw(f: dict) -> dict:
@@ -1425,7 +1428,7 @@ async def render_results(bot: Bot, chat_id: int, state: FSMContext) -> None:
     page = f.get("page", 0)
     kw = _kw(f)
     total = await db.count_filtered(**kw)
-    rows = await db.search_filtered(limit=_PAGE, offset=page * _PAGE, **kw)
+    rows = await db.search_filtered(limit=_GRID, offset=page * _GRID, **kw)
     if f.get("collection"):
         crumbs = (f"{db.COLLECTIONS.get(f['collection'])} · 🚗 {f.get('vtype') or 'всі'} · "
                   f"🌍 {f.get('region') or 'всі'}")
@@ -1445,13 +1448,13 @@ async def render_results(bot: Bot, chat_id: int, state: FSMContext) -> None:
             b.as_markup(),
         )
         return
-    pages_total = (total + _PAGE - 1) // _PAGE
-    start = page * _PAGE
-    listing = "\n".join(f"{start + i + 1}. <b>{r['plate_number']}</b>" for i, r in enumerate(rows))
+    pages_total = (total + _GRID - 1) // _GRID
+    start = page * _GRID
     text = (f"🔍 <b>Результати</b> ({total:,})".replace(",", " ")
-            + f" · стор. {page + 1}/{pages_total}\n<i>{crumbs}</i>\n\n{listing}")
+            + f" · стор. {page + 1}/{pages_total}\n<i>{crumbs}</i>\n\nОбери номер 👇")
     b = InlineKeyboardBuilder()
-    b.button(text="🔎 Детальніше", callback_data="s_details")
+    for r in rows:  # номери як кнопки, 3 в рядок → тап відкриває картку
+        b.button(text=r["plate_number"], callback_data=f"pd:{r['plate_number']}")
     has_prev, has_next = page > 0, start + len(rows) < total
     if has_prev:
         b.button(text="◀️ Назад", callback_data="pg:prev")
@@ -1459,11 +1462,13 @@ async def render_results(bot: Bot, chat_id: int, state: FSMContext) -> None:
         b.button(text="➡️ Далі", callback_data="pg:next")
     b.button(text="🔄 Новий пошук", callback_data="search")
     b.button(text="⬅️ Меню", callback_data="menu")
-    layout = [1]
+    layout = [3] * (len(rows) // 3)
+    if len(rows) % 3:
+        layout.append(len(rows) % 3)
     nav = int(has_prev) + int(has_next)
     if nav:
         layout.append(nav)
-    layout += [1, 1]
+    layout += [2]
     b.adjust(*layout)
     await show(bot, chat_id, text, b.as_markup())
 
@@ -1516,7 +1521,8 @@ async def render_detail(bot: Bot, chat_id: int, state: FSMContext, plate: str,
                         note: Optional[str] = None) -> None:
     """Render full details of one plate + favorite toggle and a back button."""
     f = await _filters(state)
-    back_cb = {"favs": "favs", "hunt": "hd_details", "feed": "fd_details"}.get(f.get("dorigin"), "s_details")
+    back_cb = {"favs": "favs", "hunt": "hd_details", "feed": "f_show",
+               "results": "s_results"}.get(f.get("dorigin"), "s_results")
     locs = await db.plate_locations(plate)
     fav = await db.is_favorite(chat_id, plate)
     digits = parse_plate(plate).get("digits")
