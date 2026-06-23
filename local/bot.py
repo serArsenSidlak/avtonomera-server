@@ -252,7 +252,12 @@ def _summary(f: dict) -> str:
 def _hunt_desc(h: dict) -> str:
     """Short human description of a hunt, e.g. '0*00 (для Електромобіль · по всій Україні)'."""
     digits = h.get("digits_exact") or (h.get("digits_mask") or "").replace("_", "*")
-    combo = (h.get("letters_start") or "") + (digits or "")
+    ls = h.get("letters_start") or ""
+    le = h.get("letters_end") or ""
+    if le:  # слово на номері: перші + (цифри|****) + кінцеві
+        combo = f"{ls}{digits or '****'}{le}"
+    else:
+        combo = ls + (digits or "")
     if not combo:
         combo = "будь-який"
     parts = ["для " + (h.get("vehicle_type") or "всіх ТЗ"), h.get("region") or "по всій Україні"]
@@ -313,7 +318,8 @@ async def render_main(bot: Bot, chat_id: int, banner: str = "") -> None:
         + "🇺🇦 <b>Моніторинг Автономерів</b>\n"
         "<i>Постав номер на стеження — і дізнайся першим, щойно він зʼявиться.</i>\n\n"
         f"📦 У базі: <b>{total:,}</b> номерів".replace(",", " ") + "\n"
-        f"💎 Тариф: <b>{plan}</b>\n\n"
+        f"💎 Тариф: <b>{plan}</b>\n"
+        "🟢 Працює 24/7\n\n"
         "👇 Створи моніторинг або скористайся пошуком"
     )
     markup = kb_main()
@@ -1707,8 +1713,8 @@ async def cb_myhunts(cq: CallbackQuery) -> None:
         cnt = await db.count_hunt_matches(h)
         digits = h.get("digits_exact")
         pop = await db.hunts_combo_count(digits) if digits else 0
-        pop_txt = f" · 🎯{pop}" if pop else ""
-        lines.append(f"<b>{idx}.</b> {status} {_hunt_desc(h)}\n    зараз {cnt}{pop_txt}")
+        pop_txt = f" · 🎯 моніторять ще {pop}" if pop else ""
+        lines.append(f"<b>{idx}.</b> {status} {_hunt_desc(h)}\n    🔢 збігів зараз: <b>{cnt}</b>{pop_txt}")
         b.button(text=f"🔍 №{idx}", callback_data=f"hview:{h['id']}")
         b.button(text=f"{'⏸' if h['is_active'] else '▶️'} №{idx}", callback_data=f"toggle:{h['id']}")
         b.button(text=f"❌ №{idx}", callback_data=f"del:{h['id']}")
