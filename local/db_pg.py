@@ -409,10 +409,15 @@ async def distinct_vehicle_types() -> List[str]:
     return await _memo("vtypes", 3600, _distinct_vehicle_types_raw)
 
 
+# Display priority: легкові/вантажні перші, далі електромобілі, потім решта.
+_VTYPE_ORDER = {"Легковий, вантажний": 0, "Електромобіль": 1, "Мотоцикл": 2,
+                "Причіп": 3, "Електромотоцикл": 4}
+
+
 async def _distinct_vehicle_types_raw() -> List[str]:
-    return [r[0] for r in await _fetch(
-        "SELECT DISTINCT vehicle_type FROM plates WHERE vehicle_type IS NOT NULL ORDER BY vehicle_type"
-    )]
+    rows = [r[0] for r in await _fetch(
+        "SELECT DISTINCT vehicle_type FROM plates WHERE vehicle_type IS NOT NULL")]
+    return sorted(rows, key=lambda t: (_VTYPE_ORDER.get(t, 9), t))
 
 
 async def collection_counts() -> List[Dict[str, Any]]:
@@ -469,6 +474,28 @@ async def distinct_series(
     params.append(limit)
     sql = ("SELECT letters_start, COUNT(*) c FROM plates WHERE " + " AND ".join(where)
            + " GROUP BY letters_start ORDER BY c DESC LIMIT ?")
+    return [r[0] for r in await _fetch(sql, *params)]
+
+
+async def distinct_series_end(
+    region: Optional[str] = None, vehicle_type: Optional[str] = None,
+    letters_start: Optional[str] = None, limit: int = 60
+) -> List[str]:
+    """Distinct ENDING series (letters_end, Додаток 5) available for the given filters, by frequency."""
+    where = ["letters_end IS NOT NULL", "is_available = 1"]
+    params: List[Any] = []
+    if region:
+        where.append("region = ?")
+        params.append(region)
+    if vehicle_type:
+        where.append("vehicle_type = ?")
+        params.append(vehicle_type)
+    if letters_start:
+        where.append("letters_start = ?")
+        params.append(letters_start)
+    params.append(limit)
+    sql = ("SELECT letters_end, COUNT(*) c FROM plates WHERE " + " AND ".join(where)
+           + " GROUP BY letters_end ORDER BY c DESC LIMIT ?")
     return [r[0] for r in await _fetch(sql, *params)]
 
 
