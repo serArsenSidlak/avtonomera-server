@@ -1,40 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "Автономера — авто-збирач (e-driver)",
-  "version": "8.2",
-  "description": "Кожні 3 год делікатно (≤9/хв) збирає номери з e-driver і шле у чергу на сервер (адмін підтверджує оновлення).",
-  "permissions": [
-    "storage",
-    "unlimitedStorage",
-    "alarms",
-    "tabs"
-  ],
+  "name": "Автономера — збирач opendata",
+  "version": "9.0",
+  "description": "Поки ти вручну ходиш по opendata.hsc.gov.ua — тихо перехоплює відповіді й накопичує номери по регіонах. Далі: експорт у CSV, дедуп і відправка оновлень у свою базу.",
+  "permissions": ["storage", "unlimitedStorage", "tabs"],
   "host_permissions": [
-    "*://*.gov.ua/*",
+    "*://opendata.hsc.gov.ua/*",
     "https://34.123.136.171.nip.io/*"
   ],
-  "background": {
-    "service_worker": "background.js"
-  },
+  "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
-      "matches": [
-        "*://*.gov.ua/*"
-      ],
-      "js": [
-        "inject.js"
-      ],
+      "matches": ["*://opendata.hsc.gov.ua/*"],
+      "js": ["inject.js"],
       "run_at": "document_start",
       "world": "MAIN",
       "all_frames": true
     },
     {
-      "matches": [
-        "*://*.gov.ua/*"
-      ],
-      "js": [
-        "content.js"
-      ],
+      "matches": ["*://opendata.hsc.gov.ua/*"],
+      "js": ["content.js"],
       "run_at": "document_start",
       "world": "ISOLATED",
       "all_frames": true
@@ -42,6 +27,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Автономера — авто-збирач"
+    "default_title": "Автономера — збирач opendata"
   }
 }
