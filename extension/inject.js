@@ -1,22 +1,28 @@
-// MAIN world: capture the Authorization token so the harvest can reuse the session.
+// MAIN world: тихо перехоплює відповіді opendata (fetch + XHR), у яких є таблиця номерів,
+// і передає сирий HTML у content.js. Працює, поки ти вручну ходиш по сайту.
 (function () {
-  function send(a) { try { window.postMessage({ __avtoAuth: true, auth: a }, "*"); } catch (e) {} }
-  function authOf(h) {
-    try {
-      if (!h) return null;
-      if (h.get) return h.get("authorization") || h.get("Authorization");
-      if (typeof h === "object") for (const k in h) if (k.toLowerCase() === "authorization") return h[k];
-    } catch (e) {}
-    return null;
+  function post(html, url) {
+    try { if (html && html.indexOf("Номерний") >= 0) window.postMessage({ __avtoCap: true, html: html, url: url || "" }, "*"); }
+    catch (e) {}
   }
   const oF = window.fetch;
-  if (oF) window.fetch = function (...a) {
-    try { const x = authOf((a[1] || {}).headers) || (a[0] && a[0].headers ? authOf(a[0].headers) : null); if (x) send(x); } catch (e) {}
-    return oF.apply(this, a);
-  };
-  const oS = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.setRequestHeader = function (k, v) {
-    try { if (k && k.toLowerCase() === "authorization") send(v); } catch (e) {}
-    return oS.apply(this, arguments);
+  if (oF) {
+    window.fetch = function (...a) {
+      return oF.apply(this, a).then(function (res) {
+        try { res.clone().text().then(function (t) { post(t, res.url); }).catch(function () {}); } catch (e) {}
+        return res;
+      });
+    };
+  }
+  const oOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (m, u) { try { this.__au = u; } catch (e) {} return oOpen.apply(this, arguments); };
+  const oSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.send = function () {
+    try {
+      this.addEventListener("load", function () {
+        try { if (this.responseType === "" || this.responseType === "text") post(this.responseText, this.__au); } catch (e) {}
+      });
+    } catch (e) {}
+    return oSend.apply(this, arguments);
   };
 })();
