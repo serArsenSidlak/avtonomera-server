@@ -580,8 +580,10 @@ import threading as _threading
 import urllib.request as _urlreq
 
 _AC_DB = _os.path.join(_tempfile.gettempdir(), "autocheck_test.db")
-_AC_2026_URL = ("https://data.gov.ua/dataset/0ffd8b75-0628-48cc-952a-9302f9799ec0/resource/"
-                "3f13166f-090b-499e-8e23-e9851c5a5f67/download/reestrtz2026.zip")
+# Тестовий дамп: невеликий файл за поч.2022 (~270k рядків) — МАЄ і номер (N_REG_NEW), і VIN.
+# (Файл 2026 — найновіший формат — номер прибрали, тож для тесту по номеру беремо старіший.)
+_AC_TEST_URL = ("https://data.gov.ua/dataset/0ffd8b75-0628-48cc-952a-9302f9799ec0/resource/"
+                "bef7b47b-7963-44b5-88a8-f84241137b5b/download/reestrtz2022.zip")
 _AC_STATUS = {"state": "не завантажено", "rows": 0}
 
 
@@ -612,7 +614,7 @@ def _load_autocheck_test():
     try:
         with _tempfile.TemporaryDirectory() as tmp:
             zp = _os.path.join(tmp, "x.zip")
-            req = _urlreq.Request(_AC_2026_URL, headers={"User-Agent": "avtonomera/1.0"})
+            req = _urlreq.Request(_AC_TEST_URL, headers={"User-Agent": "avtonomera/1.0"})
             with _urlreq.urlopen(req, timeout=600) as r, open(zp, "wb") as fh:
                 while True:
                     c = r.read(1 << 20)
