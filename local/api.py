@@ -597,6 +597,7 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
     """
     import asyncio
     import json as _json
+    import urllib.request
     from urllib.parse import quote
 
     url = await db.get_meta("autocheck_url")
