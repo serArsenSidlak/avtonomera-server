@@ -51,7 +51,8 @@ async def guard(request: Request, call_next):
     # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
-                             "/collector", "/autocheck/register"):
+                             "/collector", "/autocheck/register", "/autocheck/load-test",
+                             "/autocheck/load-status"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -571,6 +572,140 @@ def _html_text(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+# ── AutoCheck тестова база НА СЕРВЕРІ (2026, без тунелю) ──
+import os as _os
+import sqlite3 as _sqlite3
+import tempfile as _tempfile
+import threading as _threading
+import urllib.request as _urlreq
+
+_AC_DB = _os.path.join(_tempfile.gettempdir(), "autocheck_test.db")
+_AC_2026_URL = ("https://data.gov.ua/dataset/0ffd8b75-0628-48cc-952a-9302f9799ec0/resource/"
+                "3f13166f-090b-499e-8e23-e9851c5a5f67/download/reestrtz2026.zip")
+_AC_STATUS = {"state": "не завантажено", "rows": 0}
+
+
+def _ac_iso(v):
+    v = (v or "").strip()
+    m = _re.match(r"(\d{2})\.(\d{2})\.(\d{2,4})", v)
+    if not m:
+        return None
+    y = m.group(3)
+    y = "20" + y if len(y) == 2 else y
+    return f"{y}-{m.group(2)}-{m.group(1)}"
+
+
+def _ac_int(v):
+    v = (v or "").strip()
+    try:
+        return int(float(v.replace(",", "."))) if v else None
+    except ValueError:
+        return None
+
+
+def _load_autocheck_test():
+    """Завантажити дамп МВС 2026 і побудувати локальну SQLite для тесту (фоном)."""
+    import csv as _csv
+    import zipfile as _zip
+
+    _AC_STATUS["state"] = "завантаження…"
+    try:
+        with _tempfile.TemporaryDirectory() as tmp:
+            zp = _os.path.join(tmp, "x.zip")
+            req = _urlreq.Request(_AC_2026_URL, headers={"User-Agent": "avtonomera/1.0"})
+            with _urlreq.urlopen(req, timeout=600) as r, open(zp, "wb") as fh:
+                while True:
+                    c = r.read(1 << 20)
+                    if not c:
+                        break
+                    fh.write(c)
+            with _zip.ZipFile(zp) as zf:
+                names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+                zf.extractall(tmp)
+            _AC_STATUS["state"] = "заливка…"
+            con = _sqlite3.connect(_AC_DB)
+            con.execute("DROP TABLE IF EXISTS v")
+            con.execute("CREATE TABLE v (vin TEXT, plate TEXT, brand TEXT, model TEXT, make_year INT, "
+                        "color TEXT, kind TEXT, body TEXT, fuel TEXT, capacity INT, d_reg TEXT, "
+                        "oper_name TEXT, dep TEXT)")
+            con.execute("PRAGMA journal_mode=OFF")
+            con.execute("PRAGMA synchronous=OFF")
+            OP = "CD.OPER_CODE||'-'||CD.OPERAS"
+            INS = "INSERT INTO v VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+            total = 0
+            for name in names:
+                batch = []
+                with open(_os.path.join(tmp, name), encoding="utf-8", newline="") as fh:
+                    for row in _csv.DictReader(fh, delimiter=";"):
+                        opn = row.get("OPER_NAME")
+                        comb = row.get(OP) or ""
+                        if not opn and comb:
+                            parts = comb.split(" - ", 1)
+                            opn = parts[1] if len(parts) > 1 else comb
+                        plate = _plate_norm(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
+                        batch.append((
+                            (row.get("VIN") or "").strip() or None, plate,
+                            (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
+                            _ac_int(row.get("MAKE_YEAR")), (row.get("COLOR") or "").strip() or None,
+                            (row.get("KIND") or "").strip() or None, (row.get("BODY") or "").strip() or None,
+                            (row.get("FUEL") or "").strip() or None, _ac_int(row.get("CAPACITY")),
+                            _ac_iso(row.get("D_REG")), opn, (row.get("DEP") or "").strip() or None))
+                        if len(batch) >= 20000:
+                            con.executemany(INS, batch); total += len(batch); batch = []
+                if batch:
+                    con.executemany(INS, batch); total += len(batch)
+            con.commit()
+            con.execute("CREATE INDEX ix_vin ON v(vin)")
+            con.execute("CREATE INDEX ix_plate ON v(plate)")
+            con.commit()
+            con.close()
+            _AC_STATUS["state"] = "готово"
+            _AC_STATUS["rows"] = total
+    except Exception as exc:  # noqa: BLE001
+        _AC_STATUS["state"] = f"помилка: {exc}"
+
+
+def _ac_lookup_local(plate, vin):
+    """Пошук у локальній тестовій SQLite. None → бази нема (тоді йдемо в тунель)."""
+    if not _os.path.exists(_AC_DB):
+        return None
+    con = _sqlite3.connect(_AC_DB)
+    con.row_factory = _sqlite3.Row
+    try:
+        if plate:
+            rows = con.execute("SELECT * FROM v WHERE plate=? ORDER BY d_reg", (_plate_norm(plate),)).fetchall()
+        elif vin:
+            rows = con.execute("SELECT * FROM v WHERE vin=? ORDER BY d_reg", ((vin or "").strip().upper(),)).fetchall()
+        else:
+            return {"found": False}
+    finally:
+        con.close()
+    if not rows:
+        return {"found": False}
+    last = rows[-1]
+    veh = {k: last[k] for k in ("vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel", "capacity")}
+    history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"], "plate": r["plate"]} for r in rows]
+    return {"found": True, "vehicle": veh, "history": history}
+
+
+@app.post("/autocheck/load-test")
+async def autocheck_load_test(request: Request) -> dict:
+    """Запустити завантаження тестової бази 2026 на сервері (secret-protected)."""
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "disabled")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    if _AC_STATUS["state"] not in ("завантаження…", "заливка…"):
+        _threading.Thread(target=_load_autocheck_test, daemon=True).start()
+    return {"status": _AC_STATUS}
+
+
+@app.get("/autocheck/load-status")
+async def autocheck_load_status() -> dict:
+    return dict(_AC_STATUS)
+
+
 @app.post("/autocheck/register")
 async def autocheck_register(request: Request) -> dict:
     """The AutoCheck PC-agent registers its current Cloudflare tunnel URL here (secret-protected)."""
@@ -600,12 +735,19 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
     import urllib.request
     from urllib.parse import quote
 
+    if not plate and not vin:
+        raise HTTPException(400, "plate or vin required")
+
+    # 1) Локальна тестова база на сервері (якщо завантажена) — пріоритет, без тунелю.
+    local = await asyncio.to_thread(_ac_lookup_local, plate, vin)
+    if local is not None:
+        return local
+
+    # 2) Інакше — проксі на тунель PC-агента.
     url = await db.get_meta("autocheck_url")
     if not url:
         return {"found": False, "offline": True, "note": "AutoCheck-агент не підключений"}
-    q = f"plate={quote(plate)}" if plate else (f"vin={quote(vin)}" if vin else "")
-    if not q:
-        raise HTTPException(400, "plate or vin required")
+    q = f"plate={quote(plate)}" if plate else f"vin={quote(vin)}"
 
     def _call():
         req = urllib.request.Request(f"{url}/lookup?{q}", headers={"x-secret": config.INGEST_SECRET})
