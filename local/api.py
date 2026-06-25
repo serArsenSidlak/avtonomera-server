@@ -743,12 +743,14 @@ def _ac_lookup_local(plate, vin):
     con = _sqlite3.connect(_AC_DB)
     con.row_factory = _sqlite3.Row
     try:
+        # рядки без дати — в кінці (найсвіжіші переоформлення часто без D_REG) → last = поточне авто
+        _ord = " ORDER BY (d_reg IS NULL), d_reg"
         if plate:
             key_plate, key_vin = _plate_norm(plate), None
-            rows = con.execute("SELECT * FROM v WHERE plate=? ORDER BY d_reg", (key_plate,)).fetchall()
+            rows = con.execute("SELECT * FROM v WHERE plate=?" + _ord, (key_plate,)).fetchall()
         elif vin:
             key_plate, key_vin = None, (vin or "").strip().upper()
-            rows = con.execute("SELECT * FROM v WHERE vin=? ORDER BY d_reg", (key_vin,)).fetchall()
+            rows = con.execute("SELECT * FROM v WHERE vin=?" + _ord, (key_vin,)).fetchall()
         else:
             return {"found": False}
         # 🚨 розшук — по тому ж ключу (працює навіть якщо в реєстрі не знайдено)
@@ -765,10 +767,13 @@ def _ac_lookup_local(plate, vin):
         con.close()
     if not rows:
         return {"found": False, "wanted": wanted} if wanted else {"found": False}
-    last = rows[-1]
+    last = rows[-1]  # найсвіжіша операція = поточне авто
     veh = {k: last[k] for k in ("vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel", "capacity")}
-    history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"], "plate": r["plate"]} for r in rows]
-    res = {"found": True, "vehicle": veh, "history": history}
+    dates = [r["d_reg"] for r in rows if r["d_reg"]]
+    first_reg = min(dates) if dates else None
+    history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"], "plate": r["plate"]}
+               for r in reversed(rows)]  # найновіше зверху
+    res = {"found": True, "vehicle": veh, "first_reg": first_reg, "history": history}
     if wanted:
         res["wanted"] = wanted
     return res

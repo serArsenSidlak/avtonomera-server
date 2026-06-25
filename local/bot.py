@@ -101,6 +101,17 @@ TYPE_SERIES_PREFIX: dict = {
 }
 
 
+def _region_for_plate(plate: Optional[str]) -> str:
+    """Назва регіону за першими 2 літерами номера (код регіону, Додаток 4)."""
+    if not plate or len(plate) < 2:
+        return ""
+    pref = plate[:2].upper()
+    for region, pairs in REGION_SERIES.items():
+        if pref in pairs:
+            return region
+    return ""
+
+
 def _region_series(region: Optional[str]) -> list:
     """Official series pairs for a region name (tolerant of 'Київ'/'м. Київ' variants)."""
     if not region:
@@ -525,12 +536,18 @@ def _fmt_autocheck(d: dict, query: str) -> str:
         lines.append(f"🔑 VIN: <code>{v['vin']}</code>")
     if v.get("plate"):
         lines.append(f"🔢 Поточний номер: <b>{v['plate']}</b>")
+        region = _region_for_plate(v.get("plate"))
+        if region:
+            lines.append(f"📍 Регіон: {region}")
+    if d.get("first_reg"):
+        lines.append(f"🗓 Перша реєстрація: {_fmt_date(d['first_reg'])}")
     if h:
-        lines.append(f"\n📋 <b>Історія реєстрацій</b> (всього {len(h)}):")
-        for r in h[-12:]:
+        lines.append(f"\n📋 <b>Історія реєстрацій</b> (всього {len(h)}, нові зверху):")
+        for r in h[:12]:  # сервер віддає найновіші зверху
             op = (r.get("oper_name") or "").capitalize()
             dep = r.get("dep") or ""
             pl = r.get("plate") or ""
+            car = " ".join(str(x) for x in (r.get("brand"), r.get("model")) if x)
             row = f"• {_fmt_date(r.get('d_reg'))}"
             if pl:
                 row += f" — {pl}"
@@ -538,6 +555,9 @@ def _fmt_autocheck(d: dict, query: str) -> str:
                 row += f" — {op}"
             if dep:
                 row += f" ({dep})"
+            # якщо номер у цій операції стояв на ІНШОМУ авто, ніж поточне — позначимо
+            if car and v.get("brand") and r.get("vin") and r.get("vin") != v.get("vin"):
+                row += f" [{car}]"
             lines.append(row)
         if len(h) > 12:
             lines.append(f"…та ще {len(h) - 12} операцій")

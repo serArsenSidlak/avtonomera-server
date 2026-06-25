@@ -345,13 +345,17 @@ def _build_local() -> None:
 
 
 def _lookup(plate=None, vin=None) -> dict:
+    # Сортуємо за роком дампу (надійний тег), потім за датою; рядки без дати (нові
+    # переоформлення часто без D_REG) — В КІНЦІ року, бо вони найсвіжіші. Так останній
+    # рядок = ПОТОЧНЕ авто (номер міг переходити з машини на машину).
+    order = "ORDER BY src_year, (d_reg IS NULL), d_reg"
     con = _connect()
     try:
         if plate:
-            rows = con.execute("SELECT * FROM vehicle_ops WHERE plate=? ORDER BY d_reg",
+            rows = con.execute("SELECT * FROM vehicle_ops WHERE plate=? " + order,
                                (_norm_plate(plate),)).fetchall()
         elif vin:
-            rows = con.execute("SELECT * FROM vehicle_ops WHERE vin=? ORDER BY d_reg",
+            rows = con.execute("SELECT * FROM vehicle_ops WHERE vin=? " + order,
                                ((vin or "").strip().upper(),)).fetchall()
         else:
             return {"found": False}
@@ -359,12 +363,16 @@ def _lookup(plate=None, vin=None) -> dict:
         con.close()
     if not rows:
         return {"found": False}
-    last = rows[-1]
+    last = rows[-1]  # найсвіжіша операція = поточне авто на цьому номері
     veh = {k: last[k] for k in ("vin", "plate", "brand", "model", "make_year", "color",
                                 "kind", "body", "fuel", "capacity")}
+    dates = [r["d_reg"] for r in rows if r["d_reg"]]
+    first_reg = min(dates) if dates else None
+    # Історія — найновіше зверху; з маркою/VIN кожного рядка (видно, як номер міняв авто).
     history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"],
-               "plate": r["plate"]} for r in rows]
-    return {"found": True, "vehicle": veh, "history": history}
+                "plate": r["plate"], "vin": r["vin"], "brand": r["brand"],
+                "model": r["model"], "make_year": r["make_year"]} for r in reversed(rows)]
+    return {"found": True, "vehicle": veh, "first_reg": first_reg, "history": history}
 
 
 def _poll_once() -> bool:
