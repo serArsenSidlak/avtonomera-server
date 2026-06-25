@@ -75,6 +75,14 @@ async def _warm() -> None:
             await asyncio.to_thread(viber.set_webhook)
         except Exception as exc:  # noqa: BLE001
             print(f"[viber] set_webhook on startup failed: {exc!r}")
+    # Авто-завантаження відкритого датасету розшуку (публічний, без секрету) — щоб
+    # перевірка «в розшуку / не в розшуку» завжди була достовірною, навіть коли авто
+    # шукає PC-агент (у його базі таблиці розшуку немає → доливаємо її на сервері).
+    try:
+        if _WANTED_STATUS.get("state") not in ("завантаження…", "готово"):
+            _threading.Thread(target=_load_wanted, daemon=True).start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[wanted] auto-load on startup failed: {exc!r}")
 
 
 @app.post("/viber/webhook")
