@@ -580,10 +580,10 @@ import threading as _threading
 import urllib.request as _urlreq
 
 _AC_DB = _os.path.join(_tempfile.gettempdir(), "autocheck_test.db")
-# Тестовий дамп: невеликий файл за поч.2022 (~270k рядків) — МАЄ і номер (N_REG_NEW), і VIN.
-# (Файл 2026 — найновіший формат — номер прибрали, тож для тесту по номеру беремо старіший.)
+# Тестовий дамп: 2025 рік (~2.2 млн рядків) — МАЄ і номер (N_REG_NEW), і VIN, і свіжі авто.
+# (Файл 2026 — новий формат — номер прибрали; беремо 2025, де є все.)
 _AC_TEST_URL = ("https://data.gov.ua/dataset/0ffd8b75-0628-48cc-952a-9302f9799ec0/resource/"
-                "bef7b47b-7963-44b5-88a8-f84241137b5b/download/reestrtz2022.zip")
+                "b7e72d22-55f5-4545-87dc-94e6c8ee03ef/download/reestrtz2025.zip")
 _AC_STATUS = {"state": "не завантажено", "rows": 0}
 
 
@@ -608,6 +608,7 @@ def _ac_int(v):
 def _load_autocheck_test():
     """Завантажити дамп МВС 2026 і побудувати локальну SQLite для тесту (фоном)."""
     import csv as _csv
+    import io as _io
     import zipfile as _zip
 
     _AC_STATUS["state"] = "завантаження…"
@@ -615,18 +616,16 @@ def _load_autocheck_test():
         with _tempfile.TemporaryDirectory() as tmp:
             zp = _os.path.join(tmp, "x.zip")
             req = _urlreq.Request(_AC_TEST_URL, headers={"User-Agent": "avtonomera/1.0"})
-            with _urlreq.urlopen(req, timeout=600) as r, open(zp, "wb") as fh:
+            with _urlreq.urlopen(req, timeout=900) as r, open(zp, "wb") as fh:
                 while True:
                     c = r.read(1 << 20)
                     if not c:
                         break
                     fh.write(c)
-            with _zip.ZipFile(zp) as zf:
-                names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
-                zf.extractall(tmp)
             _AC_STATUS["state"] = "заливка…"
+            if _os.path.exists(_AC_DB):
+                _os.remove(_AC_DB)
             con = _sqlite3.connect(_AC_DB)
-            con.execute("DROP TABLE IF EXISTS v")
             con.execute("CREATE TABLE v (vin TEXT, plate TEXT, brand TEXT, model TEXT, make_year INT, "
                         "color TEXT, kind TEXT, body TEXT, fuel TEXT, capacity INT, d_reg TEXT, "
                         "oper_name TEXT, dep TEXT)")
@@ -635,27 +634,30 @@ def _load_autocheck_test():
             OP = "CD.OPER_CODE||'-'||CD.OPERAS"
             INS = "INSERT INTO v VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
             total = 0
-            for name in names:
-                batch = []
-                with open(_os.path.join(tmp, name), encoding="utf-8", newline="") as fh:
-                    for row in _csv.DictReader(fh, delimiter=";"):
-                        opn = row.get("OPER_NAME")
-                        comb = row.get(OP) or ""
-                        if not opn and comb:
-                            parts = comb.split(" - ", 1)
-                            opn = parts[1] if len(parts) > 1 else comb
-                        plate = _plate_norm(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
-                        batch.append((
-                            (row.get("VIN") or "").strip() or None, plate,
-                            (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
-                            _ac_int(row.get("MAKE_YEAR")), (row.get("COLOR") or "").strip() or None,
-                            (row.get("KIND") or "").strip() or None, (row.get("BODY") or "").strip() or None,
-                            (row.get("FUEL") or "").strip() or None, _ac_int(row.get("CAPACITY")),
-                            _ac_iso(row.get("D_REG")), opn, (row.get("DEP") or "").strip() or None))
-                        if len(batch) >= 20000:
-                            con.executemany(INS, batch); total += len(batch); batch = []
-                if batch:
-                    con.executemany(INS, batch); total += len(batch)
+            with _zip.ZipFile(zp) as zf:
+                names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+                for name in names:
+                    batch = []
+                    with zf.open(name) as raw:  # stream from zip → не розпаковуємо на диск
+                        reader = _csv.DictReader(_io.TextIOWrapper(raw, encoding="utf-8", newline=""), delimiter=";")
+                        for row in reader:
+                            opn = row.get("OPER_NAME")
+                            comb = row.get(OP) or ""
+                            if not opn and comb:
+                                parts = comb.split(" - ", 1)
+                                opn = parts[1] if len(parts) > 1 else comb
+                            plate = _plate_norm(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
+                            batch.append((
+                                (row.get("VIN") or "").strip() or None, plate,
+                                (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
+                                _ac_int(row.get("MAKE_YEAR")), (row.get("COLOR") or "").strip() or None,
+                                (row.get("KIND") or "").strip() or None, (row.get("BODY") or "").strip() or None,
+                                (row.get("FUEL") or "").strip() or None, _ac_int(row.get("CAPACITY")),
+                                _ac_iso(row.get("D_REG")), opn, (row.get("DEP") or "").strip() or None))
+                            if len(batch) >= 20000:
+                                con.executemany(INS, batch); total += len(batch); batch = []
+                    if batch:
+                        con.executemany(INS, batch); total += len(batch)
             con.commit()
             con.execute("CREATE INDEX ix_vin ON v(vin)")
             con.execute("CREATE INDEX ix_plate ON v(plate)")
