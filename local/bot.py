@@ -547,6 +547,28 @@ def _fmt_autocheck(d: dict, query: str) -> str:
     return (wblock + body_text) if wanted else body_text
 
 
+def _acheck_links_kb(query: str) -> InlineKeyboardMarkup:
+    """External official-check links (ОСАГО/Мінюст/AutoRia/аукціони) for a plate/VIN + nav."""
+    import re as _re
+    from urllib.parse import quote
+
+    q = (query or "").strip()
+    alnum = _re.sub(r"[^A-Z0-9]", "", q.upper())
+    is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q.upper())
+    b = InlineKeyboardBuilder()
+    b.button(text="🚗 AutoRia", url=f"https://auto.ria.com/uk/search/?text={quote(q)}")
+    if is_vin:
+        b.button(text="🇺🇸 Аукціони (VIN)", url=f"https://en.bidfax.info/?do=search&subaction=search&story={quote(alnum)}")
+    b.button(text="🛡 ОСАГО (МТСБУ)", url="https://policy.mtsbu.ua/")
+    b.button(text="⚖️ Обтяження (Мінюст)", url="https://online.minjust.gov.ua/")
+    b.button(text="🚗 Перевірити ще", callback_data="acheck")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    n = 4 if is_vin else 3
+    rows = [2] * (n // 2) + ([1] if n % 2 else []) + [2]
+    b.adjust(*rows)
+    return b.as_markup()
+
+
 @dp.callback_query(F.data == "acheck")
 async def cb_acheck(cq: CallbackQuery, state: FSMContext) -> None:
     """Start the AutoCheck flow — ask for a plate or VIN."""
@@ -569,8 +591,7 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
         return
     await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
     res = await _autocheck_query(q)
-    await show(message.bot, message.chat.id, _fmt_autocheck(res, q),
-               kb_back([("🚗 Перевірити ще", "acheck")]))
+    await show(message.bot, message.chat.id, _fmt_autocheck(res, q), _acheck_links_kb(q))
 
 
 # ── Слово на номері (пошук по перших + останніх літерах) ──
