@@ -52,7 +52,8 @@ async def guard(request: Request, call_next):
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
                              "/collector", "/autocheck/register", "/autocheck/load-test",
-                             "/autocheck/load-status"):
+                             "/autocheck/load-status", "/autocheck/load-wanted",
+                             "/autocheck/wanted-status"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -623,9 +624,8 @@ def _load_autocheck_test():
                         break
                     fh.write(c)
             _AC_STATUS["state"] = "заливка…"
-            if _os.path.exists(_AC_DB):
-                _os.remove(_AC_DB)
             con = _sqlite3.connect(_AC_DB)
+            con.execute("DROP TABLE IF EXISTS v")
             con.execute("CREATE TABLE v (vin TEXT, plate TEXT, brand TEXT, model TEXT, make_year INT, "
                         "color TEXT, kind TEXT, body TEXT, fuel TEXT, capacity INT, d_reg TEXT, "
                         "oper_name TEXT, dep TEXT)")
@@ -669,27 +669,100 @@ def _load_autocheck_test():
         _AC_STATUS["state"] = f"помилка: {exc}"
 
 
+# ── Джерело 2: авто в РОЗШУКУ (відкритий датасет МВС, по VIN/номеру) ──
+_WANTED_URL = ("https://data.gov.ua/dataset/9b0e87e0-eaa3-4f14-9547-03d61b70abb6/resource/"
+               "e43a82da-89e1-4bbb-820c-bd04ab7a0c89/download/carswanted.json")
+_WANTED_STATUS = {"state": "не завантажено", "rows": 0}
+
+
+def _load_wanted():
+    """Завантажити список авто в розшуку у таблицю wanted (тієї ж тестової SQLite)."""
+    import json as _json
+
+    _WANTED_STATUS["state"] = "завантаження…"
+    try:
+        req = _urlreq.Request(_WANTED_URL, headers={"User-Agent": "avtonomera/1.0"})
+        with _urlreq.urlopen(req, timeout=600) as r:
+            data = _json.loads(r.read().decode("utf-8"))
+        con = _sqlite3.connect(_AC_DB)
+        con.execute("DROP TABLE IF EXISTS wanted")
+        con.execute("CREATE TABLE wanted (vin TEXT, plate TEXT, brandmodel TEXT, color TEXT, "
+                    "cartype TEXT, seizure TEXT, organ TEXT)")
+        con.execute("PRAGMA journal_mode=OFF")
+        con.execute("PRAGMA synchronous=OFF")
+        rows = []
+        for w in (data or []):
+            rows.append((
+                (w.get("bodynumber") or "").strip().upper() or None,
+                _plate_norm(w.get("vehiclenumber")) if w.get("vehiclenumber") else None,
+                (w.get("brandmodel") or "").strip() or None, (w.get("color") or "").strip() or None,
+                (w.get("cartype") or "").strip() or None, (w.get("illegalseizuredate") or "")[:10] or None,
+                (w.get("organunit") or "").strip() or None))
+        con.executemany("INSERT INTO wanted VALUES (?,?,?,?,?,?,?)", rows)
+        con.commit()
+        con.execute("CREATE INDEX ix_w_vin ON wanted(vin)")
+        con.execute("CREATE INDEX ix_w_plate ON wanted(plate)")
+        con.commit()
+        con.close()
+        _WANTED_STATUS["state"] = "готово"
+        _WANTED_STATUS["rows"] = len(rows)
+    except Exception as exc:  # noqa: BLE001
+        _WANTED_STATUS["state"] = f"помилка: {exc}"
+
+
+@app.post("/autocheck/load-wanted")
+async def autocheck_load_wanted(request: Request) -> dict:
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "disabled")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    if _WANTED_STATUS["state"] != "завантаження…":
+        _threading.Thread(target=_load_wanted, daemon=True).start()
+    return {"status": _WANTED_STATUS}
+
+
+@app.get("/autocheck/wanted-status")
+async def autocheck_wanted_status() -> dict:
+    return dict(_WANTED_STATUS)
+
+
 def _ac_lookup_local(plate, vin):
-    """Пошук у локальній тестовій SQLite. None → бази нема (тоді йдемо в тунель)."""
+    """Пошук у локальній тестовій SQLite (+ перевірка розшуку). None → бази нема."""
     if not _os.path.exists(_AC_DB):
         return None
     con = _sqlite3.connect(_AC_DB)
     con.row_factory = _sqlite3.Row
     try:
         if plate:
-            rows = con.execute("SELECT * FROM v WHERE plate=? ORDER BY d_reg", (_plate_norm(plate),)).fetchall()
+            key_plate, key_vin = _plate_norm(plate), None
+            rows = con.execute("SELECT * FROM v WHERE plate=? ORDER BY d_reg", (key_plate,)).fetchall()
         elif vin:
-            rows = con.execute("SELECT * FROM v WHERE vin=? ORDER BY d_reg", ((vin or "").strip().upper(),)).fetchall()
+            key_plate, key_vin = None, (vin or "").strip().upper()
+            rows = con.execute("SELECT * FROM v WHERE vin=? ORDER BY d_reg", (key_vin,)).fetchall()
         else:
             return {"found": False}
+        # 🚨 розшук — по тому ж ключу (працює навіть якщо в реєстрі не знайдено)
+        wanted = []
+        has_w = con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wanted'").fetchone()
+        if has_w:
+            if key_plate:
+                wr = con.execute("SELECT * FROM wanted WHERE plate=?", (key_plate,)).fetchall()
+            else:
+                wr = con.execute("SELECT * FROM wanted WHERE vin=?", (key_vin,)).fetchall()
+            wanted = [{"brandmodel": w["brandmodel"], "color": w["color"], "seizure": w["seizure"],
+                       "organ": w["organ"]} for w in wr]
     finally:
         con.close()
     if not rows:
-        return {"found": False}
+        return {"found": False, "wanted": wanted} if wanted else {"found": False}
     last = rows[-1]
     veh = {k: last[k] for k in ("vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel", "capacity")}
     history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"], "plate": r["plate"]} for r in rows]
-    return {"found": True, "vehicle": veh, "history": history}
+    res = {"found": True, "vehicle": veh, "history": history}
+    if wanted:
+        res["wanted"] = wanted
+    return res
 
 
 @app.post("/autocheck/load-test")
