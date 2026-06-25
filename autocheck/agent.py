@@ -231,6 +231,121 @@ def _load_all() -> None:
             STATE["loading"] = False
 
 
+def _dumps_dir() -> str:
+    return os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+
+
+def _iso2(v):
+    v = (v or "").strip()
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{2,4})", v)
+    if m:
+        y = m.group(3)
+        y = "20" + y if len(y) == 2 else y
+        return f"{y}-{m.group(2)}-{m.group(1)}"
+    if re.match(r"\d{4}-\d{2}-\d{2}", v):
+        return v[:10]
+    return None
+
+
+_OPER_COMBINED = "CD.OPER_CODE||'-'||CD.OPERAS"
+
+
+def _record_flex(row, src_year):
+    """Один рядок дампу → кортеж COLUMNS. Підтримує старий і новий (2026) формати."""
+    opn = row.get("OPER_NAME")
+    opc = _int(row.get("OPER_CODE"))
+    comb = row.get(_OPER_COMBINED) or ""
+    if not opn and comb:
+        parts = comb.split(" - ", 1)
+        if opc is None:
+            opc = _int(parts[0])
+        opn = parts[1] if len(parts) > 1 else comb
+    plate = _norm_plate(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
+    return ((row.get("VIN") or "").strip() or None, plate,
+            (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
+            _int(row.get("MAKE_YEAR")), (row.get("COLOR") or "").strip() or None,
+            (row.get("KIND") or "").strip() or None, (row.get("BODY") or "").strip() or None,
+            (row.get("PURPOSE") or "").strip() or None, (row.get("FUEL") or "").strip() or None,
+            _int(row.get("CAPACITY")), _int(row.get("OWN_WEIGHT")), _int(row.get("TOTAL_WEIGHT")),
+            _iso2(row.get("D_REG")), opc, opn, _int(row.get("DEP_CODE")),
+            (row.get("DEP") or "").strip() or None, (row.get("REG_ADDR_KOATUU") or "").strip() or None,
+            (row.get("PERSON") or "").strip() or None, src_year)
+
+
+def _find_local_dumps():
+    d = _dumps_dir()
+    files = []
+    for root in (d, os.path.join(d, "dumps")):
+        if os.path.isdir(root):
+            for f in os.listdir(root):
+                p = os.path.join(root, f)
+                if os.path.isfile(p) and (f.lower().endswith(".zip") or f.lower().endswith(".csv")):
+                    files.append(p)
+    return sorted(set(files))
+
+
+def _build_local() -> None:
+    """Побудувати базу з дампів, що лежать поряд із .exe (без завантаження з мережі)."""
+    import csv as _csv
+    import io as _io
+    import zipfile as _zip
+
+    with _lock:
+        if STATE["loading"]:
+            return
+        STATE["loading"] = True
+    try:
+        dumps = _find_local_dumps()
+        if not dumps:
+            _log("Дампів поряд не знайдено. Поклади reestrTZ*.zip у папку з цим файлом.")
+            return
+        ins = f"INSERT INTO vehicle_ops ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
+        con = _connect()
+        con.execute("DROP TABLE IF EXISTS vehicle_ops")
+        _ensure_schema(con)
+        con.execute("PRAGMA journal_mode=OFF")
+        con.execute("PRAGMA synchronous=OFF")
+        total = 0
+        for path in dumps:
+            ym = re.search(r"(20\d{2})", os.path.basename(path))
+            sy = int(ym.group(1)) if ym else None
+            _log(f"Будую з {os.path.basename(path)}…")
+            try:
+                streams = []
+                if path.lower().endswith(".zip"):
+                    zf = _zip.ZipFile(path)
+                    for n in zf.namelist():
+                        if n.lower().endswith(".csv"):
+                            streams.append(_io.TextIOWrapper(zf.open(n), encoding="utf-8", errors="replace", newline=""))
+                else:
+                    streams.append(open(path, encoding="utf-8", errors="replace", newline=""))
+                for st in streams:
+                    batch = []
+                    for row in _csv.DictReader(st, delimiter=";"):
+                        batch.append(_record_flex(row, sy))
+                        if len(batch) >= 20000:
+                            con.executemany(ins, batch); total += len(batch); batch = []
+                            _log(f"{os.path.basename(path)}: {total} рядків…")
+                    if batch:
+                        con.executemany(ins, batch); total += len(batch)
+                con.commit()
+            except Exception as exc:  # noqa: BLE001
+                _log(f"{os.path.basename(path)}: помилка ({exc})")
+        _log("Будую індекси…")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
+        con.commit()
+        con.close()
+        with _lock:
+            STATE["db_rows"] = _db_count()
+        _log(f"База готова: {STATE['db_rows']} рядків.")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Помилка побудови: {exc}")
+    finally:
+        with _lock:
+            STATE["loading"] = False
+
+
 def _lookup(plate=None, vin=None) -> dict:
     con = _connect()
     try:
@@ -311,7 +426,8 @@ input{background:#1b1f27;color:#eef1f6;border:1px solid #333;border-radius:8px;p
 </head><body>
 <h2>🚗 AutoCheck — агент перевірки авто</h2>
 <div class=bar>
-<button onclick="j('/api/load','POST')">⬇️ Завантажити / оновити базу МВС</button>
+<button onclick="j('/api/build','POST')">🛠 Побудувати базу з дампів (поряд)</button>
+<button onclick="j('/api/load','POST')">⬇️ Завантажити з мережі</button>
 <button class=g onclick="j('/api/tunnel','POST')">🔗 Підключити до бота</button>
 <div id=prog></div>
 <div id=stat class=muted style="margin-top:8px"></div>
@@ -376,11 +492,27 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/load":
             threading.Thread(target=_load_all, daemon=True).start()
             self._send({"started": True})
+        elif self.path == "/api/build":
+            threading.Thread(target=_build_local, daemon=True).start()
+            self._send({"started": True})
         elif self.path == "/api/tunnel":
             threading.Thread(target=_start_tunnel, daemon=True).start()
             self._send({"started": True})
         else:
             self._send({"error": "not found"}, 404)
+
+
+def _autostart() -> None:
+    """Авто: якщо бази нема, а дампи поряд — побудувати; потім авто-підключення до бота."""
+    rows = _db_count()
+    if rows == 0 and _find_local_dumps():
+        _log("Знайшов дампи поряд — будую базу…")
+        _build_local()
+    if _db_count() > 0:
+        _log("Підключаю до бота…")
+        _start_tunnel()
+    else:
+        _log("Бази немає. Поклади дампи поряд і натисни «🛠 Побудувати», або «⬇️ Завантажити з мережі».")
 
 
 def main() -> None:
@@ -393,6 +525,7 @@ def main() -> None:
         webbrowser.open(url)
     except Exception:  # noqa: BLE001
         pass
+    threading.Thread(target=_autostart, daemon=True).start()  # авто-побудова/підключення
     srv.serve_forever()
 
 
