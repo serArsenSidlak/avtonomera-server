@@ -402,7 +402,7 @@ def _start_tunnel() -> None:
                 break
             continue
         m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-        if m:
+        if m and not m.group(0).startswith("https://api."):  # пропускаємо службовий api.trycloudflare.com
             url = m.group(0)
             with _lock:
                 STATE["tunnel_url"] = url
