@@ -499,6 +499,16 @@ async def _autocheck_query(query: str) -> dict:
     return await _ac_get(param, val)
 
 
+def _full_plate(text: str) -> Optional[str]:
+    """Normalized plate if text is a COMPLETE UA plate (XX####XX); else None."""
+    import re as _re
+
+    from local.plate import normalize_plate
+
+    p = normalize_plate(text or "")
+    return p if _re.fullmatch(r"[А-ЯІЇЄҐ]{2}\d{4}[А-ЯІЇЄҐ]{2}", p) else None
+
+
 def _fmt_date(iso: Optional[str]) -> str:
     """ISO YYYY-MM-DD → DD.MM.YYYY for display."""
     if iso and len(iso) >= 10 and iso[4] == "-":
@@ -513,6 +523,11 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
                 "Спробуй пізніше.")
     wanted = d.get("wanted") or []
     if not d.get("found") and not wanted:
+        fp = _full_plate(query)
+        if fp:
+            return (f"🔍 Номер <b>{fp}</b> у реєстрі МВС <b>не значиться</b> — з 2013 року на ньому "
+                    "не реєстрували авто.\n\nЙмовірно, він <b>вільний</b>. Постав його на моніторинг — "
+                    "і я сповіщу, щойно він зʼявиться в продажу 👇")
         return (f"🔍 За запитом <b>{query}</b> у реєстрі МВС нічого не знайдено.\n\n"
                 "<i>Перевір правильність номера/VIN. У базі — операції з 2013 року.</i>")
     v = d.get("vehicle") or {}
@@ -611,6 +626,12 @@ def _ac_menu_kb(d: dict, query: str) -> InlineKeyboardMarkup:
     wanted = bool(d.get("wanted"))
     b = InlineKeyboardBuilder()
     groups: list = []
+    # Вільний номер (не в реєстрі) → пропозиція моніторингу доступності.
+    if not found and not wanted:
+        fp = _full_plate(query)
+        if fp:
+            b.button(text="🔔 Поставити на моніторинг", callback_data=f"acmon:{fp}")
+            groups.append(1)
     # Внутрішні розділи — кожен показується тільки по натисканню (progressive disclosure).
     g = 0
     if found:
@@ -713,6 +734,41 @@ async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
         await show(cq.message.bot, cq.message.chat.id, _fmt_ac_roz(res), _ac_sub_kb(key))
     else:  # sum — назад до короткого екрану з кнопками
         await show(cq.message.bot, cq.message.chat.id, _fmt_ac_summary(res, key), _ac_menu_kb(res, key))
+
+
+async def _create_plate_monitor(bot: Bot, chat_id: int, plate: str) -> None:
+    """Create an exact-plate availability monitor (hunt) and confirm."""
+    from local.plate import parse_plate
+
+    used = await db.active_hunt_count(chat_id)
+    limit = await db.hunt_limit(chat_id)
+    if used >= limit:
+        await show(bot, chat_id,
+                   f"⚠️ Ліміт моніторингів вичерпано ({used}/{limit}).\n\n"
+                   "👥 Запроси друзів — за кожного +1 слот.",
+                   kb_back([("👥 Запросити друзів", "ref"), ("🎯 Мої моніторинги", "myhunts")]))
+        return
+    p = parse_plate(plate)
+    h = {"match_type": "exact", "pattern": plate, "name": plate,
+         "letters_start": p.get("letters_start"), "letters_end": p.get("letters_end"),
+         "digits_exact": p.get("digits"), "region": None, "vehicle_type": None}
+    await db.ensure_user(chat_id, None)
+    await db.add_hunt(chat_id, h)
+    cnt = await db.count_hunt_matches(h)
+    lines = ["✅ <b>Моніторинг створено</b>", f"Номер: <b>{plate}</b>", ""]
+    if cnt:
+        lines.append("🔎 Цей номер зараз <b>доступний</b> — глянь у пошуку!")
+    else:
+        lines.append("🔎 Зараз його немає в продажу — сповіщу, щойно зʼявиться.")
+    await show(bot, chat_id, "\n".join(lines), kb_back([("🎯 Мої моніторинги", "myhunts")]))
+
+
+@dp.callback_query(F.data.startswith("acmon:"))
+async def cb_acmon(cq: CallbackQuery, state: FSMContext) -> None:
+    """Create an availability monitor for a free plate from the AutoCheck result."""
+    plate = cq.data.split(":", 1)[1]
+    await cq.answer()
+    await _create_plate_monitor(cq.message.bot, cq.message.chat.id, plate)
 
 
 @dp.callback_query(F.data == "acheck")
@@ -2798,8 +2854,14 @@ async def cb_a_deladm(cq: CallbackQuery) -> None:
 
 @dp.message()
 async def fallback(message: Message) -> None:
-    """Stray text outside a flow: delete it and show the menu to keep things clean."""
+    """Stray text outside a flow: a full plate → AutoCheck; else show the menu."""
+    plate = _full_plate(message.text or "")
     await _safe_delete(message.bot, message.chat.id, message.message_id)
+    if plate:
+        await show(message.bot, message.chat.id, "🔎 Перевіряю номер у реєстрі МВС…", kb_back())
+        res = await _autocheck_query(plate)
+        await show(message.bot, message.chat.id, _fmt_ac_summary(res, plate), _ac_menu_kb(res, plate))
+        return
     await render_main(message.bot, message.chat.id)
 
 
