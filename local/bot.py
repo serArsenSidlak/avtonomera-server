@@ -506,28 +506,39 @@ def _fmt_date(iso: Optional[str]) -> str:
     return iso or "—"
 
 
-def _fmt_autocheck(d: dict, query: str) -> str:
-    """Render an AutoCheck lookup result."""
+def _fmt_ac_summary(d: dict, query: str) -> str:
+    """Minimal result screen — identification + a hint to use the section buttons."""
     if d.get("offline"):
         return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
                 "Спробуй пізніше.")
     wanted = d.get("wanted") or []
-    wblock = ""
-    if wanted:
-        w = wanted[0]
-        wblock = ("🚨 <b>АВТО В РОЗШУКУ!</b>\n"
-                  f"{w.get('brandmodel') or ''} · {(w.get('color') or '').lower()}\n"
-                  f"📆 Заволодіння: {_fmt_date(w.get('seizure'))}\n"
-                  f"🏢 {w.get('organ') or ''}\n\n")
-    if not d.get("found"):
-        if wanted:
-            return wblock + f"ℹ️ У реєстрі МВС (тест) операцій по <b>{query}</b> немає, але авто Є в розшуку (вище)."
+    if not d.get("found") and not wanted:
         return (f"🔍 За запитом <b>{query}</b> у реєстрі МВС нічого не знайдено.\n\n"
                 "<i>Перевір правильність номера/VIN. У базі — операції з 2013 року.</i>")
     v = d.get("vehicle") or {}
-    h = d.get("history") or []
     title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
-    lines = [f"🚗 <b>{title}</b>"]
+    lines = []
+    if wanted:
+        lines.append("🚨 <b>УВАГА: авто в розшуку!</b> Деталі — кнопка «🚨 Розшук».\n")
+    lines.append(f"✅ Знайдено за запитом <b>{query}</b>:")
+    if d.get("found"):
+        yr = f", {v['make_year']}" if v.get("make_year") else ""
+        lines.append(f"🚗 <b>{title}</b>{yr}")
+        if v.get("plate"):
+            lines.append(f"🔢 {v['plate']}")
+    lines.append("\nОбери, що показати 👇")
+    return "\n".join(lines)
+
+
+def _fmt_ac_reg(d: dict) -> str:
+    """Держреєстрація — повні дані поточного авто."""
+    if d.get("offline"):
+        return "⏳ База перевірки авто зараз недоступна. Спробуй пізніше."
+    v = d.get("vehicle") or {}
+    if not v:
+        return "📋 <b>Держреєстрація</b>\n\nДані відсутні."
+    title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
+    lines = ["📋 <b>Держреєстрація</b>\n", f"🚗 <b>{title}</b>"]
     if v.get("make_year"):
         lines.append(f"📅 Рік випуску: <b>{v['make_year']}</b>")
     spec = []
@@ -551,6 +562,7 @@ def _fmt_autocheck(d: dict, query: str) -> str:
             lines.append(f"📍 Регіон: {region}")
     if d.get("first_reg"):
         lines.append(f"🗓 Перша реєстрація: {_fmt_date(d['first_reg'])}")
+    h = d.get("history") or []
     if h:
         last = h[0]  # сервер віддає найновіші зверху
         op = (last.get("oper_name") or "").capitalize()
@@ -560,35 +572,65 @@ def _fmt_autocheck(d: dict, query: str) -> str:
         if last.get("dep"):
             row += f" ({last['dep']})"
         lines.append(row)
-        lines.append(f"📋 Всього операцій по запиту: <b>{len(h)}</b> "
-                     "(повна історія — кнопками нижче 👇)")
-    lines.append("\n🚨 Розшук: " + ("<b>⚠️ В РОЗШУКУ!</b>" if wanted else "✅ не в розшуку"))
-    lines.append("<i>Джерела: реєстр МВС + база розшуку (data.gov.ua), без персональних даних.</i>")
-    body_text = "\n".join(lines)
-    return (wblock + body_text) if wanted else body_text
+    lines.append("\n<i>Джерело: реєстр МВС (data.gov.ua), без персональних даних.</i>")
+    return "\n".join(lines)
 
 
-def _acheck_links_kb(query: str, d: Optional[dict] = None) -> InlineKeyboardMarkup:
-    """History buttons (номер/авто) + external official-check links + nav."""
+def _fmt_ac_roz(d: dict) -> str:
+    """Розшук — статус по базі розшуку МВС."""
+    if d.get("offline"):
+        return "⏳ База перевірки авто зараз недоступна. Спробуй пізніше."
+    wanted = d.get("wanted") or []
+    if not wanted:
+        return ("🚨 <b>Розшук</b>\n\n✅ Авто <b>не значиться</b> в базі розшуку МВС.\n\n"
+                "<i>Джерело: відкритий датасет розшуку МВС (CarsWanted).</i>")
+    lines = ["🚨 <b>АВТО В РОЗШУКУ!</b>\n"]
+    for w in wanted:
+        lines.append(f"• {w.get('brandmodel') or ''} · {(w.get('color') or '').lower()}")
+        lines.append(f"  📆 Заволодіння: {_fmt_date(w.get('seizure'))}")
+        if w.get("organ"):
+            lines.append(f"  🏢 {w['organ']}")
+    lines.append("\n<i>Джерело: відкритий датасет розшуку МВС.</i>")
+    return "\n".join(lines)
+
+
+def _ac_menu_kb(d: dict, query: str) -> InlineKeyboardMarkup:
+    """Section buttons (held behind taps) + external official-check links + nav."""
     import re as _re
     from urllib.parse import quote
 
+    v = d.get("vehicle") or {}
+    plate = v.get("plate") or ""
+    vin = v.get("vin") or ""
+    primary = plate or vin or _ac_detect(query)[1]
     q = (query or "").strip()
     alnum = _re.sub(r"[^A-Z0-9]", "", q.upper())
-    is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q.upper())
+    is_vin = bool(vin) or (bool(_re.search(r"\d", q)) and len(alnum) >= 10
+                           and not _re.search(r"[А-ЯІЇЄҐ]", q.upper()))
+    found = bool(d.get("found"))
+    wanted = bool(d.get("wanted"))
     b = InlineKeyboardBuilder()
-    rows: list = []
-    # Дві історії — по номеру (всі авто на цьому номері) і по авто (вся історія VIN).
-    v = (d or {}).get("vehicle") or {}
-    nh = 0
-    if v.get("plate"):
-        b.button(text="🔢 Історія номера", callback_data=f"achist:p:{v['plate']}")
-        nh += 1
-    if v.get("vin"):
-        b.button(text="🚗 Історія авто", callback_data=f"achist:v:{v['vin']}")
-        nh += 1
-    if nh:
-        rows.append(nh)
+    groups: list = []
+    # Внутрішні розділи — кожен показується тільки по натисканню (progressive disclosure).
+    g = 0
+    if found:
+        b.button(text="📋 Держреєстрація", callback_data=f"ac:reg:{vin or primary}")
+        g += 1
+    if found or wanted:
+        b.button(text="🚨 Розшук", callback_data=f"ac:roz:{primary}")
+        g += 1
+    if g:
+        groups.append(g)
+    g = 0
+    if plate:
+        b.button(text="🔢 Історія номера", callback_data=f"ac:pl:{plate}")
+        g += 1
+    if vin:
+        b.button(text="🚗 Історія авто", callback_data=f"ac:vin:{vin}")
+        g += 1
+    if g:
+        groups.append(g)
+    # Зовнішні офіційні перевірки (відкривають сайт у натиску — як просив Артур).
     ext = 0
     b.button(text="🚗 AutoRia", url=f"https://auto.ria.com/uk/search/?text={quote(q)}")
     ext += 1
@@ -599,11 +641,11 @@ def _acheck_links_kb(query: str, d: Optional[dict] = None) -> InlineKeyboardMark
     ext += 1
     b.button(text="⚖️ Обтяження (Мінюст)", url="https://online.minjust.gov.ua/")
     ext += 1
-    rows += [2] * (ext // 2) + ([1] if ext % 2 else [])
+    groups += [2] * (ext // 2) + ([1] if ext % 2 else [])
     b.button(text="🚗 Перевірити ще", callback_data="acheck")
     b.button(text="⬅️ Меню", callback_data="menu")
-    rows.append(2)
-    b.adjust(*rows)
+    groups.append(2)
+    b.adjust(*groups)
     return b.as_markup()
 
 
@@ -633,38 +675,44 @@ def _fmt_ac_history(d: dict, title: str) -> str:
     return "\n".join(lines)
 
 
-def _ac_back_kb(back_key: str) -> InlineKeyboardMarkup:
-    """Back-to-card + menu for a history view."""
+def _ac_sub_kb(primary_key: str) -> InlineKeyboardMarkup:
+    """Back-to-summary + menu for a section view."""
     b = InlineKeyboardBuilder()
-    b.button(text="⬅️ Назад до картки", callback_data=f"achist:m:{back_key}")
+    b.button(text="⬅️ Назад", callback_data=f"ac:sum:{primary_key}")
     b.button(text="⬅️ Меню", callback_data="menu")
-    b.adjust(1, 1)
+    b.adjust(2)
     return b.as_markup()
 
 
-@dp.callback_query(F.data.startswith("achist:"))
-async def cb_achist(cq: CallbackQuery, state: FSMContext) -> None:
-    """Show plate-history (всі авто на номері) / car-history (вся історія VIN) / back to card."""
+@dp.callback_query(F.data.startswith("ac:"))
+async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
+    """Reveal one AutoCheck section on tap: reg / roz / plate-hist / vin-hist / back to summary."""
     try:
-        _, mode, key = cq.data.split(":", 2)
+        _, sec, key = cq.data.split(":", 2)
     except ValueError:
         await cq.answer()
         return
     await cq.answer()
-    if mode == "m":  # назад до картки — перезапит за тим же ключем
-        await show(cq.message.bot, cq.message.chat.id, "🔎 Оновлюю…", kb_back())
-        param, val = _ac_detect(key)
-        res = await _ac_get(param, val)
-        await show(cq.message.bot, cq.message.chat.id, _fmt_autocheck(res, key), _acheck_links_kb(key, res))
-        return
-    await show(cq.message.bot, cq.message.chat.id, "🔎 Збираю історію…", kb_back())
-    if mode == "p":
+    await show(cq.message.bot, cq.message.chat.id, "🔎 Завантажую…", kb_back())
+    if sec == "pl":
         res = await _ac_get("plate", key)
         title = f"🔢 <b>Історія номера {key}</b>\n<i>усі авто, що були на цьому номері</i>"
-    else:
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_sub_kb(key))
+        return
+    if sec == "vin":
         res = await _ac_get("vin", key)
         title = f"🚗 <b>Історія авто</b>\n<i>VIN <code>{key}</code> — усі операції цього авто</i>"
-    await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_back_kb(key))
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_sub_kb(key))
+        return
+    # reg / roz / sum — повний lookup за ключем (поточне авто + розшук)
+    param, val = _ac_detect(key)
+    res = await _ac_get(param, val)
+    if sec == "reg":
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_reg(res), _ac_sub_kb(key))
+    elif sec == "roz":
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_roz(res), _ac_sub_kb(key))
+    else:  # sum — назад до короткого екрану з кнопками
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_summary(res, key), _ac_menu_kb(res, key))
 
 
 @dp.callback_query(F.data == "acheck")
@@ -689,7 +737,7 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
         return
     await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
     res = await _autocheck_query(q)
-    await show(message.bot, message.chat.id, _fmt_autocheck(res, q), _acheck_links_kb(q, res))
+    await show(message.bot, message.chat.id, _fmt_ac_summary(res, q), _ac_menu_kb(res, q))
 
 
 # ── Слово на номері (пошук по перших + останніх літерах) ──
