@@ -490,7 +490,17 @@ def _fmt_autocheck(d: dict, query: str) -> str:
     if d.get("offline"):
         return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
                 "Спробуй пізніше.")
+    wanted = d.get("wanted") or []
+    wblock = ""
+    if wanted:
+        w = wanted[0]
+        wblock = ("🚨 <b>АВТО В РОЗШУКУ!</b>\n"
+                  f"{w.get('brandmodel') or ''} · {(w.get('color') or '').lower()}\n"
+                  f"📆 Заволодіння: {_fmt_date(w.get('seizure'))}\n"
+                  f"🏢 {w.get('organ') or ''}\n\n")
     if not d.get("found"):
+        if wanted:
+            return wblock + f"ℹ️ У реєстрі МВС (тест) операцій по <b>{query}</b> немає, але авто Є в розшуку (вище)."
         return (f"🔍 За запитом <b>{query}</b> у реєстрі МВС нічого не знайдено.\n\n"
                 "<i>Перевір правильність номера/VIN. У базі — операції з 2013 року.</i>")
     v = d.get("vehicle") or {}
@@ -531,8 +541,10 @@ def _fmt_autocheck(d: dict, query: str) -> str:
             lines.append(row)
         if len(h) > 12:
             lines.append(f"…та ще {len(h) - 12} операцій")
-    lines.append("\n<i>Джерело: відкритий реєстр МВС (data.gov.ua), без персональних даних.</i>")
-    return "\n".join(lines)
+    lines.append("\n🚨 Розшук: " + ("<b>⚠️ В РОЗШУКУ!</b>" if wanted else "✅ не в розшуку"))
+    lines.append("<i>Джерела: реєстр МВС + база розшуку (data.gov.ua), без персональних даних.</i>")
+    body_text = "\n".join(lines)
+    return (wblock + body_text) if wanted else body_text
 
 
 @dp.callback_query(F.data == "acheck")
