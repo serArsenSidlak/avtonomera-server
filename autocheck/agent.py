@@ -3,7 +3,8 @@
 Самодостатня програма (як парсер-агент). Відкриває локальну панель у браузері. Звідти можна:
   • завантажити всі архіви МВС (data.gov.ua) у локальну базу SQLite на цьому ПК;
   • миттєво шукати по номеру/VIN (марка, модель, рік, історія реєстрацій);
-  • підключити базу до Telegram-бота через тунель Cloudflare (без проброса портів).
+  • підключити базу до Telegram-бота БЕЗ тунеля/портів — агент сам опитує сервер
+    (лише вихідні HTTP-запити), бачить запит від бота, шукає в базі й повертає результат.
 
 Запуск (Windows): просто запусти .exe → панель відкриється на http://127.0.0.1:8741
 """
@@ -14,7 +15,6 @@ import json
 import os
 import re
 import sqlite3
-import subprocess
 import sys
 import tempfile
 import threading
@@ -27,7 +27,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from autocheck_config import SECRET, SERVER_URL
 
 PORT = 8741
-CF_URL = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
 
 # Прямі ресурси набору 0ffd8b75-0628-48cc-952a-9302f9799ec0 (рік -> URL .zip).
 RESOURCES: dict = {
@@ -61,14 +60,13 @@ def _appdir() -> str:
 
 
 DB_PATH = os.path.join(_appdir(), "autocheck.db")
-CF_PATH = os.path.join(_appdir(), "cloudflared.exe")
 
 _lock = threading.Lock()
 STATE = {
     "years": {y: {"status": "—", "rows": 0} for y in sorted(RESOURCES)},
-    "db_rows": 0, "loading": False, "progress": "", "tunnel_url": "", "registered": False,
+    "db_rows": 0, "loading": False, "progress": "", "polling": False, "connected": False,
+    "answered": 0,
 }
-_cf_proc = None
 
 
 def _log(msg: str) -> None:
@@ -369,50 +367,53 @@ def _lookup(plate=None, vin=None) -> dict:
     return {"found": True, "vehicle": veh, "history": history}
 
 
-def _register(url: str) -> bool:
-    body = json.dumps({"secret": SECRET, "url": url}).encode("utf-8")
-    req = urllib.request.Request(SERVER_URL.rstrip("/") + "/autocheck/register", data=body,
+def _poll_once() -> bool:
+    """Один цикл: спитати сервер про запит у черзі, відповісти на нього. True — якщо обробив запит."""
+    body = json.dumps({"secret": SECRET}).encode("utf-8")
+    req = urllib.request.Request(SERVER_URL.rstrip("/") + "/autocheck/poll", data=body,
                                  headers={"Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=30):
-            return True
-    except Exception as exc:  # noqa: BLE001
-        _log(f"Реєстрація на сервері не вдалась: {exc}")
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    rq = data.get("req")
+    if not rq:
         return False
+    try:
+        result = _lookup(plate=rq.get("plate") or None, vin=rq.get("vin") or None)
+    except Exception as exc:  # noqa: BLE001
+        result = {"found": False, "error": str(exc)}
+    out = json.dumps({"secret": SECRET, "id": rq.get("id"), "result": result}).encode("utf-8")
+    rr = urllib.request.Request(SERVER_URL.rstrip("/") + "/autocheck/result", data=out,
+                                headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(rr, timeout=30):
+        pass
+    return True
 
 
-def _start_tunnel() -> None:
-    """Download cloudflared if needed, open a quick tunnel, register its URL with the server."""
-    global _cf_proc
-    if not os.path.exists(CF_PATH):
-        _log("Завантажую cloudflared…")
-        try:
-            _download(CF_URL, CF_PATH)
-        except Exception as exc:  # noqa: BLE001
-            _log(f"Не вдалося завантажити cloudflared: {exc}")
+def _poll_loop() -> None:
+    """Постійно опитувати сервер на запити перевірки (лише ВИХІДНІ запити — без тунеля/портів)."""
+    with _lock:
+        if STATE["polling"]:
             return
-    _log("Піднімаю тунель…")
-    _cf_proc = subprocess.Popen(
-        [CF_PATH, "tunnel", "--url", f"http://localhost:{PORT}", "--no-autoupdate"],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace")
-    for _ in range(120):
-        line = _cf_proc.stdout.readline()
-        if not line:
-            if _cf_proc.poll() is not None:
-                break
-            continue
-        m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-        if m and not m.group(0).startswith("https://api."):  # пропускаємо службовий api.trycloudflare.com
-            url = m.group(0)
+        STATE["polling"] = True
+    _log("Підключено до бота (режим опитування). Чекаю запити…")
+    fails = 0
+    while True:
+        try:
+            handled = _poll_once()
             with _lock:
-                STATE["tunnel_url"] = url
-            ok = _register(url)
+                STATE["connected"] = True
+            fails = 0
+            if handled:
+                with _lock:
+                    STATE["answered"] += 1
+                    n = STATE["answered"]
+                _log(f"Відповів на запит перевірки ✅ (усього {n})")
+        except Exception as exc:  # noqa: BLE001
+            fails += 1
             with _lock:
-                STATE["registered"] = ok
-            _log(f"Тунель активний: {url} {'(підключено до бота ✅)' if ok else ''}")
-            break
-    # keep draining output so the pipe doesn't block
-    threading.Thread(target=lambda: [l for l in iter(_cf_proc.stdout.readline, "")], daemon=True).start()
+                STATE["connected"] = False
+            _log(f"Звʼязок із сервером перервано ({exc}); повтор за 5с…")
+            time.sleep(min(5 + fails, 30))
 
 
 PANEL = """<!doctype html><html lang=uk><head><meta charset=utf-8>
@@ -428,7 +429,7 @@ input{background:#1b1f27;color:#eef1f6;border:1px solid #333;border-radius:8px;p
 <div class=bar>
 <button onclick="j('/api/build','POST')">🛠 Побудувати базу з дампів (поряд)</button>
 <button onclick="j('/api/load','POST')">⬇️ Завантажити з мережі</button>
-<button class=g onclick="j('/api/tunnel','POST')">🔗 Підключити до бота</button>
+<button class=g onclick="j('/api/connect','POST')">🔗 Підключити до бота</button>
 <div id=prog></div>
 <div id=stat class=muted style="margin-top:8px"></div>
 </div>
@@ -447,7 +448,8 @@ async function look(){const v=document.getElementById('q').value.trim();if(!v)re
 async function tick(){const s=await j('/api/state');
  document.getElementById('prog').textContent=s.progress||'';
  document.getElementById('stat').innerHTML='База: <b>'+(s.db_rows||0)+'</b> рядків. '+
-  (s.tunnel_url?('Тунель: <code>'+s.tunnel_url+'</code> '+(s.registered?'✅ підключено':'')):'Тунель не запущено.');
+  (s.connected?('✅ Підключено до бота · відповів на запитів: '+(s.answered||0)):
+   (s.polling?'Підключаюсь…':'Не підключено.'));
  const tb=document.querySelector('#tbl tbody');tb.innerHTML='';
  for(const y of Object.keys(s.years)){const r=s.years[y];
   tb.innerHTML+='<tr><td>'+y+'</td><td>'+r.status+'</td><td>'+(r.rows||0)+'</td></tr>';}}
@@ -474,7 +476,8 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 self._send({"years": STATE["years"], "db_rows": STATE["db_rows"],
                             "loading": STATE["loading"], "progress": STATE["progress"],
-                            "tunnel_url": STATE["tunnel_url"], "registered": STATE["registered"]})
+                            "polling": STATE["polling"], "connected": STATE["connected"],
+                            "answered": STATE["answered"]})
         elif self.path.startswith("/lookup"):
             # secret required only for remote (bot) calls; local panel calls without it are allowed.
             from urllib.parse import urlparse, parse_qs
@@ -495,8 +498,8 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/build":
             threading.Thread(target=_build_local, daemon=True).start()
             self._send({"started": True})
-        elif self.path == "/api/tunnel":
-            threading.Thread(target=_start_tunnel, daemon=True).start()
+        elif self.path == "/api/connect":
+            threading.Thread(target=_poll_loop, daemon=True).start()
             self._send({"started": True})
         else:
             self._send({"error": "not found"}, 404)
@@ -510,7 +513,7 @@ def _autostart() -> None:
         _build_local()
     if _db_count() > 0:
         _log("Підключаю до бота…")
-        _start_tunnel()
+        _poll_loop()
     else:
         _log("Бази немає. Поклади дампи поряд і натисни «🛠 Побудувати», або «⬇️ Завантажити з мережі».")
 

@@ -53,7 +53,7 @@ async def guard(request: Request, call_next):
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
                              "/collector", "/autocheck/register", "/autocheck/load-test",
                              "/autocheck/load-status", "/autocheck/load-wanted",
-                             "/autocheck/wanted-status"):
+                             "/autocheck/wanted-status", "/autocheck/poll", "/autocheck/result"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -765,6 +765,89 @@ def _ac_lookup_local(plate, vin):
     return res
 
 
+# ── PC-агент через ОПИТУВАННЯ (без тунеля): черга запитів + результати ──
+_AC_AGENT = {"seen": 0.0}
+_AC_QUEUE: list = []
+_AC_RESULTS: dict = {}
+_AC_NEXT = [1]
+_ac_qlock = _threading.Lock()
+
+
+def _ac_wanted(plate, vin):
+    """Розшук по серверній базі (для агентського результату, який без розшуку)."""
+    if not _os.path.exists(_AC_DB):
+        return []
+    con = _sqlite3.connect(_AC_DB)
+    con.row_factory = _sqlite3.Row
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='wanted'").fetchone():
+            return []
+        if plate:
+            wr = con.execute("SELECT * FROM wanted WHERE plate=?", (_plate_norm(plate),)).fetchall()
+        else:
+            wr = con.execute("SELECT * FROM wanted WHERE vin=?", ((vin or "").strip().upper(),)).fetchall()
+        return [{"brandmodel": w["brandmodel"], "color": w["color"], "seizure": w["seizure"],
+                 "organ": w["organ"]} for w in wr]
+    finally:
+        con.close()
+
+
+@app.post("/autocheck/poll")
+async def autocheck_poll(request: Request) -> dict:
+    """PC-агент довго-опитує чергу запитів (~10с). secret-protected."""
+    import asyncio
+    import time as _time
+
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "disabled")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    _AC_AGENT["seen"] = _time.time()
+    for _ in range(40):
+        with _ac_qlock:
+            if _AC_QUEUE:
+                return {"req": _AC_QUEUE.pop(0)}
+        await asyncio.sleep(0.25)
+    return {"req": None}
+
+
+@app.post("/autocheck/result")
+async def autocheck_result(request: Request) -> dict:
+    """PC-агент повертає результат пошуку. secret-protected."""
+    if not config.INGEST_SECRET:
+        raise HTTPException(503, "disabled")
+    body = await request.json()
+    if body.get("secret") != config.INGEST_SECRET:
+        raise HTTPException(403, "bad secret")
+    rid = body.get("id")
+    if rid is not None:
+        with _ac_qlock:
+            _AC_RESULTS[str(rid)] = body.get("result") or {"found": False}
+    return {"ok": True}
+
+
+async def _ac_query_agent(plate, vin):
+    """Поставити запит у чергу для PC-агента і дочекатись результату (None при таймауті)."""
+    import asyncio
+
+    with _ac_qlock:
+        rid = str(_AC_NEXT[0])
+        _AC_NEXT[0] += 1
+        _AC_QUEUE.append({"id": rid, "plate": plate or "", "vin": vin or ""})
+    for _ in range(80):  # ~20с
+        await asyncio.sleep(0.25)
+        with _ac_qlock:
+            if rid in _AC_RESULTS:
+                return _AC_RESULTS.pop(rid)
+    with _ac_qlock:  # таймаут — приберемо з черги
+        for i, q in enumerate(_AC_QUEUE):
+            if q["id"] == rid:
+                _AC_QUEUE.pop(i)
+                break
+    return None
+
+
 @app.post("/autocheck/load-test")
 async def autocheck_load_test(request: Request) -> dict:
     """Запустити завантаження тестової бази 2026 на сервері (secret-protected)."""
@@ -808,33 +891,26 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
     Behind the app API key (middleware). Returns {found, vehicle, history} or {found:false}.
     """
     import asyncio
-    import json as _json
-    import urllib.request
-    from urllib.parse import quote
+    import time as _time
 
     if not plate and not vin:
         raise HTTPException(400, "plate or vin required")
 
-    # 1) Локальна тестова база на сервері (якщо завантажена) — пріоритет, без тунелю.
-    local = await asyncio.to_thread(_ac_lookup_local, plate, vin)
-    if local is not None:
-        return local
-
-    # 2) Інакше — проксі на тунель PC-агента.
-    url = await db.get_meta("autocheck_url")
-    if not url:
+    res = None
+    # 1) PC-агент (повна база) через опитування — якщо опитував нещодавно.
+    if _AC_AGENT["seen"] and (_time.time() - _AC_AGENT["seen"] < 35):
+        res = await _ac_query_agent(plate, vin)
+    # 2) Інакше — локальна тестова база на сервері.
+    if res is None:
+        res = await asyncio.to_thread(_ac_lookup_local, plate, vin)
+    if res is None:
         return {"found": False, "offline": True, "note": "AutoCheck-агент не підключений"}
-    q = f"plate={quote(plate)}" if plate else f"vin={quote(vin)}"
-
-    def _call():
-        req = urllib.request.Request(f"{url}/lookup?{q}", headers={"x-secret": config.INGEST_SECRET})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return _json.loads(r.read().decode("utf-8"))
-
-    try:
-        return await asyncio.to_thread(_call)
-    except Exception as exc:  # noqa: BLE001
-        return {"found": False, "offline": True, "note": f"агент недоступний ({exc})"}
+    # Долити розшук, якщо результат від агента (він без позначки розшуку).
+    if "wanted" not in res:
+        w = await asyncio.to_thread(_ac_wanted, plate, vin)
+        if w:
+            res["wanted"] = w
+    return res
 
 
 @app.post("/stage")
