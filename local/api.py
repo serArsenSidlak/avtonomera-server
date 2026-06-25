@@ -113,7 +113,7 @@ async def health() -> dict:
 
 
 # Expo Go tunnel deep-link (update if the tunnel restarts).
-EXPO_URL = "exp://ziwjxde-anonymous-8081.exp.direct"
+EXPO_URL = "exp://bah32_a-anonymous-8081.exp.direct"
 
 
 @app.get("/open", response_class=HTMLResponse)
