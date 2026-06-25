@@ -39,13 +39,12 @@ function regionName() {
   return "";
 }
 
-function parseRows(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  let tbl = null; const tabs = doc.getElementsByTagName("table");
+function parseRowsRoot(root) {
+  let tbl = null; const tabs = root.getElementsByTagName("table");
   for (let i = 0; i < tabs.length; i++) { const h = tabs[i].querySelector("tr"); if (h && h.textContent.indexOf("Номерний") >= 0) { tbl = tabs[i]; break; } }
   if (!tbl) return [];
   const trs = tbl.querySelectorAll("tr"), rows = [], seen = {};
-  for (let j = 1; j < trs.length; j++) {
+  for (let j = 0; j < trs.length; j++) {
     const td = trs[j].querySelectorAll("td"); if (td.length < 3) continue;
     const raw = td[0].textContent.trim(); if (!raw || raw.indexOf("Номерний") >= 0) continue;
     const n = norm(raw); if (!/^\D{2}\d{4}\D{2}$/.test(n)) continue;
@@ -57,25 +56,39 @@ function parseRows(html) {
   return rows;
 }
 
-function capture(html) {
-  const rows = parseRows(html);
+function parseRows(html) { return parseRowsRoot(new DOMParser().parseFromString(html, "text/html")); }
+
+function storeRows(rows) {
   if (!rows.length) return;
   const reg = regionName();
   chrome.storage.local.get({ captures: {} }, function (d) {
     const c = d.captures || {};
     const key = reg || ("Невідомо · " + new Date().toLocaleTimeString());
-    // latest snapshot per region wins (повний знімок регіону за один запит)
-    c[key] = { region: reg || key, count: rows.length, rows: rows, time: Date.now() };
+    c[key] = { region: reg || key, count: rows.length, rows: rows, time: Date.now() };  // latest snapshot per region wins
     chrome.storage.local.set({ captures: c });
   });
 }
 
+function capture(html) { storeRows(parseRows(html)); }
+
+// 1) Перехоплення мережевих відповідей (fetch/XHR з готовою таблицею).
 window.addEventListener("message", function (e) {
   if (e.source === window && e.data && e.data.__avtoCap && e.data.html) capture(e.data.html);
 });
 
-// Запасний варіант: якщо сайт віддав результат як звичайну сторінку (без fetch/XHR),
-// беремо таблицю з готового DOM.
-window.addEventListener("load", function () {
-  try { const h = document.documentElement.outerHTML; if (h.indexOf("Номерний") >= 0) capture(h); } catch (e) {}
-});
+// 2) НАДІЙНО: періодично скануємо таблицю прямо в DOM (DataTables/AJAX/звичайна сторінка),
+//    бо сайт може вантажити результати динамічно — тоді мережевий хук їх не бачить.
+let _lastSig = "";
+function scanDom() {
+  try {
+    const rows = parseRowsRoot(document);
+    if (!rows.length) return;
+    const reg = regionName();
+    const sig = (reg || "?") + ":" + rows.length + ":" + (rows[0] && rows[0].plate_number) + ":" + (rows[rows.length - 1] && rows[rows.length - 1].plate_number);
+    if (sig === _lastSig) return;  // та сама таблиця — не перезаписуємо
+    _lastSig = sig;
+    storeRows(rows);
+  } catch (e) {}
+}
+setInterval(scanDom, 1500);
+window.addEventListener("load", scanDom);
