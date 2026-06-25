@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Автономера — збирач opendata",
-  "version": "9.0",
+  "version": "9.1",
   "description": "Поки ти вручну ходиш по opendata.hsc.gov.ua — тихо перехоплює відповіді й накопичує номери по регіонах. Далі: експорт у CSV, дедуп і відправка оновлень у свою базу.",
   "permissions": ["storage", "unlimitedStorage", "tabs"],
   "host_permissions": [
