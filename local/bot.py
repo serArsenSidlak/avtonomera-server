@@ -468,17 +468,10 @@ async def do_report(message: Message, state: FSMContext) -> None:
 
 
 # ── AutoCheck (перевірка авто по реєстру МВС, база на ПК через тунель) ──
-async def _autocheck_query(query: str) -> dict:
-    """Look up by plate or VIN via the server's /autocheck/lookup (server test DB → PC tunnel)."""
-    import re as _re
-
+async def _ac_get(param: str, val: str) -> dict:
+    """Single AutoCheck lookup forcing a specific param ('plate' or 'vin')."""
     import aiohttp
 
-    q = (query or "").strip().upper()
-    alnum = _re.sub(r"[^A-Z0-9]", "", q)
-    # VIN: лат. літери+цифри, ≥10 символів, без кирилиці. Інакше — номер.
-    is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q)
-    param, val = ("vin", alnum) if is_vin else ("plate", _re.sub(r"[\s\-]", "", q))
     headers = {"X-API-Key": config.API_KEY} if getattr(config, "API_KEY", "") else {}
     try:
         async with aiohttp.ClientSession() as s:
@@ -487,6 +480,23 @@ async def _autocheck_query(query: str) -> dict:
                 return await r.json()
     except Exception:  # noqa: BLE001
         return {"offline": True}
+
+
+def _ac_detect(query: str):
+    """Decide ('plate'|'vin', normalized value) from a free-text query."""
+    import re as _re
+
+    q = (query or "").strip().upper()
+    alnum = _re.sub(r"[^A-Z0-9]", "", q)
+    # VIN: лат. літери+цифри, ≥10 символів, без кирилиці. Інакше — номер.
+    is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q)
+    return ("vin", alnum) if is_vin else ("plate", _re.sub(r"[\s\-]", "", q))
+
+
+async def _autocheck_query(query: str) -> dict:
+    """Look up by plate or VIN via the server's /autocheck/lookup (PC-agent → server test DB)."""
+    param, val = _ac_detect(query)
+    return await _ac_get(param, val)
 
 
 def _fmt_date(iso: Optional[str]) -> str:
@@ -542,33 +552,24 @@ def _fmt_autocheck(d: dict, query: str) -> str:
     if d.get("first_reg"):
         lines.append(f"🗓 Перша реєстрація: {_fmt_date(d['first_reg'])}")
     if h:
-        lines.append(f"\n📋 <b>Історія реєстрацій</b> (всього {len(h)}, нові зверху):")
-        for r in h[:12]:  # сервер віддає найновіші зверху
-            op = (r.get("oper_name") or "").capitalize()
-            dep = r.get("dep") or ""
-            pl = r.get("plate") or ""
-            car = " ".join(str(x) for x in (r.get("brand"), r.get("model")) if x)
-            row = f"• {_fmt_date(r.get('d_reg'))}"
-            if pl:
-                row += f" — {pl}"
-            if op:
-                row += f" — {op}"
-            if dep:
-                row += f" ({dep})"
-            # якщо номер у цій операції стояв на ІНШОМУ авто, ніж поточне — позначимо
-            if car and v.get("brand") and r.get("vin") and r.get("vin") != v.get("vin"):
-                row += f" [{car}]"
-            lines.append(row)
-        if len(h) > 12:
-            lines.append(f"…та ще {len(h) - 12} операцій")
+        last = h[0]  # сервер віддає найновіші зверху
+        op = (last.get("oper_name") or "").capitalize()
+        row = f"\n🧾 Остання операція: {_fmt_date(last.get('d_reg'))}"
+        if op:
+            row += f" — {op}"
+        if last.get("dep"):
+            row += f" ({last['dep']})"
+        lines.append(row)
+        lines.append(f"📋 Всього операцій по запиту: <b>{len(h)}</b> "
+                     "(повна історія — кнопками нижче 👇)")
     lines.append("\n🚨 Розшук: " + ("<b>⚠️ В РОЗШУКУ!</b>" if wanted else "✅ не в розшуку"))
     lines.append("<i>Джерела: реєстр МВС + база розшуку (data.gov.ua), без персональних даних.</i>")
     body_text = "\n".join(lines)
     return (wblock + body_text) if wanted else body_text
 
 
-def _acheck_links_kb(query: str) -> InlineKeyboardMarkup:
-    """External official-check links (ОСАГО/Мінюст/AutoRia/аукціони) for a plate/VIN + nav."""
+def _acheck_links_kb(query: str, d: Optional[dict] = None) -> InlineKeyboardMarkup:
+    """History buttons (номер/авто) + external official-check links + nav."""
     import re as _re
     from urllib.parse import quote
 
@@ -576,17 +577,94 @@ def _acheck_links_kb(query: str) -> InlineKeyboardMarkup:
     alnum = _re.sub(r"[^A-Z0-9]", "", q.upper())
     is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q.upper())
     b = InlineKeyboardBuilder()
+    rows: list = []
+    # Дві історії — по номеру (всі авто на цьому номері) і по авто (вся історія VIN).
+    v = (d or {}).get("vehicle") or {}
+    nh = 0
+    if v.get("plate"):
+        b.button(text="🔢 Історія номера", callback_data=f"achist:p:{v['plate']}")
+        nh += 1
+    if v.get("vin"):
+        b.button(text="🚗 Історія авто", callback_data=f"achist:v:{v['vin']}")
+        nh += 1
+    if nh:
+        rows.append(nh)
+    ext = 0
     b.button(text="🚗 AutoRia", url=f"https://auto.ria.com/uk/search/?text={quote(q)}")
+    ext += 1
     if is_vin:
         b.button(text="🇺🇸 Аукціони (VIN)", url=f"https://en.bidfax.info/?do=search&subaction=search&story={quote(alnum)}")
+        ext += 1
     b.button(text="🛡 ОСАГО (МТСБУ)", url="https://policy.mtsbu.ua/")
+    ext += 1
     b.button(text="⚖️ Обтяження (Мінюст)", url="https://online.minjust.gov.ua/")
+    ext += 1
+    rows += [2] * (ext // 2) + ([1] if ext % 2 else [])
     b.button(text="🚗 Перевірити ще", callback_data="acheck")
     b.button(text="⬅️ Меню", callback_data="menu")
-    n = 4 if is_vin else 3
-    rows = [2] * (n // 2) + ([1] if n % 2 else []) + [2]
+    rows.append(2)
     b.adjust(*rows)
     return b.as_markup()
+
+
+def _fmt_ac_history(d: dict, title: str) -> str:
+    """Render a full operations list (by plate or by VIN)."""
+    if d.get("offline"):
+        return "⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено). Спробуй пізніше."
+    h = d.get("history") or []
+    if not h:
+        return title + "\n\nОперацій не знайдено."
+    lines = [title, f"📋 Всього операцій: <b>{len(h)}</b> (нові зверху):\n"]
+    for r in h[:25]:
+        op = (r.get("oper_name") or "").capitalize()
+        car = " ".join(str(x) for x in (r.get("brand"), r.get("model")) if x)
+        row = f"• {_fmt_date(r.get('d_reg'))}"
+        if r.get("plate"):
+            row += f" — {r['plate']}"
+        if car:
+            row += f" — {car}"
+        if op:
+            row += f" — {op}"
+        if r.get("dep"):
+            row += f" ({r['dep']})"
+        lines.append(row)
+    if len(h) > 25:
+        lines.append(f"\n…та ще {len(h) - 25} операцій")
+    return "\n".join(lines)
+
+
+def _ac_back_kb(back_key: str) -> InlineKeyboardMarkup:
+    """Back-to-card + menu for a history view."""
+    b = InlineKeyboardBuilder()
+    b.button(text="⬅️ Назад до картки", callback_data=f"achist:m:{back_key}")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    b.adjust(1, 1)
+    return b.as_markup()
+
+
+@dp.callback_query(F.data.startswith("achist:"))
+async def cb_achist(cq: CallbackQuery, state: FSMContext) -> None:
+    """Show plate-history (всі авто на номері) / car-history (вся історія VIN) / back to card."""
+    try:
+        _, mode, key = cq.data.split(":", 2)
+    except ValueError:
+        await cq.answer()
+        return
+    await cq.answer()
+    if mode == "m":  # назад до картки — перезапит за тим же ключем
+        await show(cq.message.bot, cq.message.chat.id, "🔎 Оновлюю…", kb_back())
+        param, val = _ac_detect(key)
+        res = await _ac_get(param, val)
+        await show(cq.message.bot, cq.message.chat.id, _fmt_autocheck(res, key), _acheck_links_kb(key, res))
+        return
+    await show(cq.message.bot, cq.message.chat.id, "🔎 Збираю історію…", kb_back())
+    if mode == "p":
+        res = await _ac_get("plate", key)
+        title = f"🔢 <b>Історія номера {key}</b>\n<i>усі авто, що були на цьому номері</i>"
+    else:
+        res = await _ac_get("vin", key)
+        title = f"🚗 <b>Історія авто</b>\n<i>VIN <code>{key}</code> — усі операції цього авто</i>"
+    await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_back_kb(key))
 
 
 @dp.callback_query(F.data == "acheck")
@@ -611,7 +689,7 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
         return
     await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
     res = await _autocheck_query(q)
-    await show(message.bot, message.chat.id, _fmt_autocheck(res, q), _acheck_links_kb(q))
+    await show(message.bot, message.chat.id, _fmt_autocheck(res, q), _acheck_links_kb(q, res))
 
 
 # ── Слово на номері (пошук по перших + останніх літерах) ──
