@@ -670,29 +670,97 @@ def _ac_menu_kb(d: dict, query: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
-def _fmt_ac_history(d: dict, title: str) -> str:
-    """Render a full operations list (by plate or by VIN)."""
+def _car_label(r: dict) -> str:
+    """'TOYOTA CAMRY · 2018' from a history row."""
+    name = " ".join(str(x) for x in (r.get("brand"), r.get("model")) if x).strip()
+    if r.get("make_year"):
+        name = (name + f" · {r['make_year']}").strip(" ·")
+    return name or "Авто"
+
+
+def _op_text(oper: Optional[str]) -> str:
+    """Tidy an operation name (sentence case, no trailing dot)."""
+    s = (oper or "").strip().rstrip(".")
+    return (s[:1].upper() + s[1:].lower()) if s else "операція"
+
+
+def _dedup_ops(rows: list) -> list:
+    """Drop exact-duplicate operations (same date+oper+dep+vin)."""
+    seen, out = set(), []
+    for r in rows:
+        k = (r.get("d_reg"), r.get("oper_name"), r.get("dep"), r.get("vin"))
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(r)
+    return out
+
+
+def _op_line(r: dict, show_plate: bool = False) -> str:
+    """One operation as a clean line: date · [plate] · operation · ТСЦ."""
+    date = _fmt_date(r.get("d_reg"))
+    head = f"🗓 <b>{date}</b>" if date != "—" else "🗓 <i>дата н/д</i>"
+    bits = [head]
+    if show_plate and r.get("plate"):
+        bits.append(f"🔢 {r['plate']}")
+    bits.append(_op_text(r.get("oper_name")))
+    line = "▪️ " + " · ".join(bits)
+    if r.get("dep"):
+        line += f"\n     🏢 {r['dep']}"
+    return line
+
+
+def _fmt_ac_history(d: dict, mode: str, key: str) -> str:
+    """Render operations grouped for readability. mode: 'plate' | 'vin'."""
     if d.get("offline"):
         return "⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено). Спробуй пізніше."
-    h = d.get("history") or []
+    h = _dedup_ops(d.get("history") or [])
+    cap = 20
+    if mode == "plate":
+        head = f"🔢 <b>Історія номера {key}</b>"
+        if not h:
+            return head + "\n\nОперацій не знайдено."
+        # групуємо за авто (VIN) — у порядку появи, нові зверху
+        order, groups = [], {}
+        for r in h:
+            gid = r.get("vin") or _car_label(r)
+            if gid not in groups:
+                groups[gid] = []
+                order.append(gid)
+            groups[gid].append(r)
+        lines = [head, f"Операцій: <b>{len(h)}</b> · авто на номері: <b>{len(order)}</b>"]
+        shown = 0
+        for gid in order:
+            ops = groups[gid]
+            lines.append(f"\n🚗 <b>{_car_label(ops[0])}</b>")
+            if ops[0].get("vin"):
+                lines.append(f"🔑 <code>{ops[0]['vin']}</code>")
+            for r in ops:
+                if shown >= cap:
+                    break
+                lines.append(_op_line(r))
+                shown += 1
+        if len(h) > cap:
+            lines.append(f"\n…та ще {len(h) - cap} операцій")
+        return "\n".join(lines)
+    # mode == 'vin' — одне авто, показуємо номери, що на ньому були
+    head = "🚗 <b>Історія авто</b>"
     if not h:
-        return title + "\n\nОперацій не знайдено."
-    lines = [title, f"📋 Всього операцій: <b>{len(h)}</b> (нові зверху):\n"]
-    for r in h[:25]:
-        op = (r.get("oper_name") or "").capitalize()
-        car = " ".join(str(x) for x in (r.get("brand"), r.get("model")) if x)
-        row = f"• {_fmt_date(r.get('d_reg'))}"
-        if r.get("plate"):
-            row += f" — {r['plate']}"
-        if car:
-            row += f" — {car}"
-        if op:
-            row += f" — {op}"
-        if r.get("dep"):
-            row += f" ({r['dep']})"
-        lines.append(row)
-    if len(h) > 25:
-        lines.append(f"\n…та ще {len(h) - 25} операцій")
+        return head + f"\n<i>VIN {key}</i>\n\nОперацій не знайдено."
+    plates, seen = [], set()
+    for r in h:
+        p = r.get("plate")
+        if p and p not in seen:
+            seen.add(p)
+            plates.append(p)
+    lines = [head, f"<b>{_car_label(h[0])}</b>", f"🔑 <code>{key}</code>"]
+    if plates:
+        lines.append(f"🔢 Номери на авто: <b>{', '.join(plates)}</b>")
+    lines.append(f"Операцій: <b>{len(h)}</b>\n")
+    for r in h[:cap]:
+        lines.append(_op_line(r, show_plate=len(plates) > 1))
+    if len(h) > cap:
+        lines.append(f"\n…та ще {len(h) - cap} операцій")
     return "\n".join(lines)
 
 
@@ -717,13 +785,11 @@ async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
     await show(cq.message.bot, cq.message.chat.id, "🔎 Завантажую…", kb_back())
     if sec == "pl":
         res = await _ac_get("plate", key)
-        title = f"🔢 <b>Історія номера {key}</b>\n<i>усі авто, що були на цьому номері</i>"
-        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_sub_kb(key))
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, "plate", key), _ac_sub_kb(key))
         return
     if sec == "vin":
         res = await _ac_get("vin", key)
-        title = f"🚗 <b>Історія авто</b>\n<i>VIN <code>{key}</code> — усі операції цього авто</i>"
-        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, title), _ac_sub_kb(key))
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, "vin", key), _ac_sub_kb(key))
         return
     # reg / roz / sum — повний lookup за ключем (поточне авто + розшук)
     param, val = _ac_detect(key)
