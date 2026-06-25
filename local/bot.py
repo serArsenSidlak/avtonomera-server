@@ -458,24 +458,21 @@ async def do_report(message: Message, state: FSMContext) -> None:
 
 # ── AutoCheck (перевірка авто по реєстру МВС, база на ПК через тунель) ──
 async def _autocheck_query(query: str) -> dict:
-    """Look up a vehicle by plate or VIN via the registered PC-agent tunnel."""
+    """Look up by plate or VIN via the server's /autocheck/lookup (server test DB → PC tunnel)."""
     import re as _re
 
     import aiohttp
 
-    url = await db.get_meta("autocheck_url")
-    if not url:
-        return {"offline": True}
     q = (query or "").strip().upper()
     alnum = _re.sub(r"[^A-Z0-9]", "", q)
     # VIN: лат. літери+цифри, ≥10 символів, без кирилиці. Інакше — номер.
     is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q)
     param, val = ("vin", alnum) if is_vin else ("plate", _re.sub(r"[\s\-]", "", q))
+    headers = {"X-API-Key": config.API_KEY} if getattr(config, "API_KEY", "") else {}
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.get(f"{url}/lookup", params={param: val},
-                             headers={"x-secret": config.INGEST_SECRET},
-                             timeout=aiohttp.ClientTimeout(total=20)) as r:
+            async with s.get("http://127.0.0.1:8000/autocheck/lookup", params={param: val},
+                             headers=headers, timeout=aiohttp.ClientTimeout(total=25)) as r:
                 return await r.json()
     except Exception:  # noqa: BLE001
         return {"offline": True}
