@@ -53,7 +53,8 @@ async def guard(request: Request, call_next):
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
                              "/collector", "/autocheck/register", "/autocheck/load-test",
                              "/autocheck/load-status", "/autocheck/load-wanted",
-                             "/autocheck/wanted-status", "/autocheck/poll", "/autocheck/result"):
+                             "/autocheck/wanted-status", "/autocheck/poll", "/autocheck/result",
+                             "/autocheck/agent-status"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -825,6 +826,17 @@ async def autocheck_result(request: Request) -> dict:
         with _ac_qlock:
             _AC_RESULTS[str(rid)] = body.get("result") or {"found": False}
     return {"ok": True}
+
+
+@app.get("/autocheck/agent-status")
+async def autocheck_agent_status() -> dict:
+    """Чи опитував PC-агент сервер нещодавно (для діагностики підключення). Без секрету — лише статус."""
+    import time as _time
+
+    seen = _AC_AGENT["seen"]
+    ago = (_time.time() - seen) if seen else None
+    return {"online": bool(seen and ago is not None and ago < 35),
+            "seconds_ago": round(ago, 1) if ago is not None else None}
 
 
 async def _ac_query_agent(plate, vin):
