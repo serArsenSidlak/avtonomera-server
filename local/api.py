@@ -1105,6 +1105,8 @@ async def _ria_marks_map():
         await _ria_bump(1)
     except Exception:  # noqa: BLE001
         return _RIA_MARKS
+    if not isinstance(data, list):  # помилка/ліміт → не список
+        return _RIA_MARKS
     m = {_rnorm(x["name"]): x["value"] for x in data}
     _RIA_MARKS.update(m)
     await _ria_store_json("ria_marks", m)
@@ -1129,6 +1131,8 @@ async def _ria_models_map(mid):
             _ria_get, f"https://developers.ria.com/auto/categories/1/marks/{mid}/models?api_key={key}")
         await _ria_bump(1)
     except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(data, list):
         return {}
     md = {_rnorm(x["name"]): x["value"] for x in data}
     _RIA_MODELS[mid] = md
@@ -1160,13 +1164,16 @@ async def _autoria_vin_decode(vin):
             with urllib.request.urlopen(req, timeout=10) as r:
                 d = _json.loads(r.read().decode("utf-8"))
             chips = {c.get("entity"): c for c in (d.get("chipsData", {}).get("chips") or [])}
-            brand = chips.get("brandId", {}).get("value")
-            modelv = chips.get("modelId", {}).get("value")
+            # ВАЖЛИВО: id у VIN-декодері (нове API) НЕ збігаються з id для average_price
+            # (старе API). Тому беремо канонічні НАЗВИ ("Mercedes-Benz", "S-Class") і
+            # матчимо їх у старих словниках марок/моделей.
+            brand = chips.get("brandId", {}).get("name")
+            modelnm = chips.get("modelId", {}).get("name")
             yr = chips.get("year", {}).get("value")
             yv = yr.get("gte") if isinstance(yr, dict) else yr
-            if not (brand and modelv):
+            if not (brand and modelnm):
                 return None
-            return {"marka_id": brand, "model_id": modelv, "year": yv}
+            return {"brand": brand, "model": modelnm, "year": yv}
         except Exception:  # noqa: BLE001
             return None
 
@@ -1219,9 +1226,18 @@ async def _autoria_price(brand, model, year, vin=None):
                     break
     if not modid and vin:  # точний матч через VIN-декодер (економно — лише при промаху)
         dec = await _autoria_vin_decode(vin)
-        if dec:
-            mid = dec.get("marka_id") or mid
-            modid = dec.get("model_id")
+        if dec and dec.get("brand"):
+            dmid = marks.get(_rnorm(dec["brand"]))
+            if dmid:
+                mid = dmid
+                mm2 = await _ria_models_map(dmid)
+                dt = _rnorm(dec.get("model"))
+                modid = mm2.get(dt)
+                if not modid and dt:
+                    for nm, mi in mm2.items():
+                        if nm and (dt.startswith(nm) or nm.startswith(dt)):
+                            modid = mi
+                            break
             year = year or dec.get("year")
     if not (mid and modid) or await _ria_quota_left() <= 0:
         await _ria_store_json(ck, {})  # кешуємо промах (на _RIA_TTL_MISS)
