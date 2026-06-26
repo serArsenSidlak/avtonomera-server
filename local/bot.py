@@ -423,9 +423,20 @@ async def push_menu_wipe_all(bot: Bot, banner: str = "") -> int:
     """
     sent = 0
     for chat_id in await db.all_user_ids():
-        _screens.pop(chat_id, None)  # force a NEW message (bumps the chat); edit would not
+        # Find the previous screen (memory first, then DB) and DELETE it — otherwise show() would
+        # just edit it in place and the chat would NOT bump to the top.
+        old = _screens.pop(chat_id, None)
+        if old is None:
+            v = await db.get_meta(f"scr_{chat_id}")
+            old = int(v) if v and v.isdigit() else None
+        if old:
+            await _safe_delete(bot, chat_id, old)
+            try:
+                await db.set_meta(f"scr_{chat_id}", "")  # so show() sends fresh, не редагує мертвий id
+            except Exception:  # noqa: BLE001
+                pass
         try:
-            await render_main(bot, chat_id, banner=banner)
+            await render_main(bot, chat_id, banner=banner)  # NEW message → bumps the chat up
             new_id = _screens.get(chat_id, 0)
             if new_id:
                 await _wipe_chat(bot, chat_id, new_id, keep={new_id})  # clear old переписку
