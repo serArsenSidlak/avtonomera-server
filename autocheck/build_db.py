@@ -25,8 +25,20 @@ _LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
                           "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
 COLUMNS = ["vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "purpose",
            "fuel", "capacity", "own_weight", "total_weight", "d_reg", "oper_code", "oper_name",
-           "dep_code", "dep", "reg_addr_koatuu", "person", "src_year"]
+           "dep_code", "dep", "reg_addr_koatuu", "person", "src_year",
+           "letters_start", "digits", "letters_end"]  # розібраний номер → швидкий пошук по комбінації/серії
 _OPER_COMBINED = "CD.OPER_CODE||'-'||CD.OPERAS"  # нова (2026) об'єднана колонка операції
+_PLATE_RE = re.compile(r"^([А-ЯІЇЄҐ]{1,3})(\d{2,4})([А-ЯІЇЄҐ]{0,3})$")
+
+
+def _plate_parts(plate):
+    """Розібрати номер на (літери_початку, цифри, літери_кінця). None — якщо не розпарсився."""
+    if not plate:
+        return (None, None, None)
+    m = _PLATE_RE.match(plate)
+    if not m:
+        return (None, None, None)
+    return (m.group(1) or None, m.group(2) or None, m.group(3) or None)
 
 
 def _appdir() -> str:
@@ -82,6 +94,7 @@ def _record(row, src_year):
         opc = _int(parts[0]) if opc is None else opc
         opn = parts[1] if len(parts) > 1 else comb
     plate = _norm_plate(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
+    ls, dg, le = _plate_parts(plate)
     return (
         (row.get("VIN") or "").strip() or None, plate,
         (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
@@ -91,7 +104,7 @@ def _record(row, src_year):
         _int(row.get("CAPACITY")), _int(row.get("OWN_WEIGHT")), _int(row.get("TOTAL_WEIGHT")),
         _iso(row.get("D_REG")), opc, opn, _int(row.get("DEP_CODE")),
         (row.get("DEP") or "").strip() or None, (row.get("REG_ADDR_KOATUU") or "").strip() or None,
-        (row.get("PERSON") or "").strip() or None, src_year,
+        (row.get("PERSON") or "").strip() or None, src_year, ls, dg, le,
     )
 
 
@@ -185,9 +198,11 @@ def main():
             print(f"\r  ✅ {os.path.basename(path)}: {cnt:,} рядків" + " " * 10)
         except Exception as exc:  # noqa: BLE001
             print(f"\r  ❌ {os.path.basename(path)}: помилка ({exc})")
-    print("\nБудую індекси (номер, VIN)…")
+    print("\nБудую індекси (номер, VIN, цифри, серія)…")
     con.execute("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)")
     con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)")
     con.commit()
     con.close()
     size_mb = os.path.getsize(DB_PATH) / 1048576

@@ -49,7 +49,19 @@ _LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
                           "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
 COLUMNS = ["vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "purpose",
            "fuel", "capacity", "own_weight", "total_weight", "d_reg", "oper_code", "oper_name",
-           "dep_code", "dep", "reg_addr_koatuu", "person", "src_year"]
+           "dep_code", "dep", "reg_addr_koatuu", "person", "src_year",
+           "letters_start", "digits", "letters_end"]  # розібраний номер → пошук по комбінації/серії
+_PLATE_RE = re.compile(r"^([А-ЯІЇЄҐ]{1,3})(\d{2,4})([А-ЯІЇЄҐ]{0,3})$")
+
+
+def _plate_parts(plate):
+    """Розібрати номер на (літери_початку, цифри, літери_кінця)."""
+    if not plate:
+        return (None, None, None)
+    m = _PLATE_RE.match(plate)
+    if not m:
+        return (None, None, None)
+    return (m.group(1) or None, m.group(2) or None, m.group(3) or None)
 
 
 def _appdir() -> str:
@@ -111,7 +123,8 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         "CREATE TABLE IF NOT EXISTS vehicle_ops (vin TEXT, plate TEXT, brand TEXT, model TEXT, "
         "make_year INTEGER, color TEXT, kind TEXT, body TEXT, purpose TEXT, fuel TEXT, "
         "capacity INTEGER, own_weight INTEGER, total_weight INTEGER, d_reg TEXT, oper_code INTEGER, "
-        "oper_name TEXT, dep_code INTEGER, dep TEXT, reg_addr_koatuu TEXT, person TEXT, src_year INTEGER)")
+        "oper_name TEXT, dep_code INTEGER, dep TEXT, reg_addr_koatuu TEXT, person TEXT, src_year INTEGER, "
+        "letters_start TEXT, digits TEXT, letters_end TEXT)")
     con.commit()
 
 
@@ -139,9 +152,11 @@ def _download(url: str, dest: str) -> None:
 def _rows(csv_path: str, year: int):
     with open(csv_path, "r", encoding="utf-8", newline="") as fh:
         for row in csv.DictReader(fh, delimiter=";"):
+            plate = _norm_plate(row.get("N_REG_NEW"))
+            ls, dg, le = _plate_parts(plate)
             yield (
                 (row.get("VIN") or "").strip() or None,
-                _norm_plate(row.get("N_REG_NEW")),
+                plate,
                 (row.get("BRAND") or "").strip() or None,
                 (row.get("MODEL") or "").strip() or None,
                 _int(row.get("MAKE_YEAR")),
@@ -160,7 +175,7 @@ def _rows(csv_path: str, year: int):
                 (row.get("DEP") or "").strip() or None,
                 (row.get("REG_ADDR_KOATUU") or "").strip() or None,
                 (row.get("PERSON") or "").strip() or None,
-                year,
+                year, ls, dg, le,
             )
 
 
@@ -217,6 +232,8 @@ def _load_all() -> None:
         _log("Будую індекси (номер, VIN)…")
         con.execute("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)")
         con.commit()
         con.close()
         with _lock:
@@ -259,6 +276,7 @@ def _record_flex(row, src_year):
             opc = _int(parts[0])
         opn = parts[1] if len(parts) > 1 else comb
     plate = _norm_plate(row.get("N_REG_NEW")) if row.get("N_REG_NEW") else None
+    ls, dg, le = _plate_parts(plate)
     return ((row.get("VIN") or "").strip() or None, plate,
             (row.get("BRAND") or "").strip() or None, (row.get("MODEL") or "").strip() or None,
             _int(row.get("MAKE_YEAR")), (row.get("COLOR") or "").strip() or None,
@@ -267,7 +285,7 @@ def _record_flex(row, src_year):
             _int(row.get("CAPACITY")), _int(row.get("OWN_WEIGHT")), _int(row.get("TOTAL_WEIGHT")),
             _iso2(row.get("D_REG")), opc, opn, _int(row.get("DEP_CODE")),
             (row.get("DEP") or "").strip() or None, (row.get("REG_ADDR_KOATUU") or "").strip() or None,
-            (row.get("PERSON") or "").strip() or None, src_year)
+            (row.get("PERSON") or "").strip() or None, src_year, ls, dg, le)
 
 
 def _find_local_dumps():
@@ -332,6 +350,8 @@ def _build_local() -> None:
         _log("Будую індекси…")
         con.execute("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)")
         con.commit()
         con.close()
         with _lock:
