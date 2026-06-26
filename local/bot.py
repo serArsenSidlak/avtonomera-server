@@ -1243,7 +1243,7 @@ async def cb_m_search(cq: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
     await show(cq.message.bot, cq.message.chat.id,
               "🔍 <b>Пошук номера</b>\n━━━━━━━━━━━━\n<i>Знайди вільний номер для реєстрації</i>",
-              _kb_submenu([("🔍 За цифрами / маскою", "search"), ("🔢 Підбір за комбінацією", "combo"),
+              _kb_submenu([("🔢 Підбір за комбінацією", "combo"), ("🎛 Розширений пошук", "search"),
                            ("🔤 Слово на номері", "wordsearch"),
                            ("✨ Добірки", "cols"), ("🔥 Популярні", "popular")]))
 
