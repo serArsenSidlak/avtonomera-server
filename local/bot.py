@@ -548,6 +548,28 @@ async def _autocheck_query(query: str) -> dict:
     return await _ac_get(param, val)
 
 
+async def _booking_status(plate: Optional[str]) -> Optional[dict]:
+    """Чи доступний номер для бронювання зараз (є у фіді ГСЦ)."""
+    if not plate:
+        return None
+    try:
+        locs = await db.plate_locations(plate)
+    except Exception:  # noqa: BLE001
+        return None
+    avail = [l for l in locs if l.get("is_available")]
+    if avail:
+        a = avail[0]
+        return {"available": True, "price": a.get("price"), "region": a.get("region")}
+    return {"available": False}
+
+
+async def _show_ac(bot: Bot, chat_id: int, query: str, res: dict) -> None:
+    """Долити статус бронювання й показати картку перевірки авто (статус + кнопки)."""
+    plate = (res.get("vehicle") or {}).get("plate") or _full_plate(query) or query
+    res["booking"] = await _booking_status(plate)
+    await show(bot, chat_id, _fmt_ac_summary(res, query), _ac_menu_kb(res, query))
+
+
 def _full_plate(text: str) -> Optional[str]:
     """Normalized plate if text is a COMPLETE UA plate (XX####XX); else None."""
     import re as _re
@@ -580,8 +602,18 @@ def _reg_status(d: dict) -> tuple:
     return ("active", "✅", "зареєстрований")
 
 
+def _booking_line(d: dict) -> str:
+    """Рядок статусу бронювання (доступність у продажу ГСЦ)."""
+    bk = d.get("booking") or {}
+    if bk.get("available"):
+        price = bk.get("price")
+        ptxt = (f" — {int(price):,} грн".replace(",", " ")) if price else ""
+        return f"🏷 Бронювання: 🟢 <b>доступний</b> у продажу{ptxt}"
+    return "🏷 Бронювання: ⚪ <b>не доступний</b> зараз"
+
+
 def _fmt_ac_summary(d: dict, query: str) -> str:
-    """Result screen — завжди з ЯВНИМ статусом номера + ідентифікація + кнопки."""
+    """Result screen — завжди з ЯВНИМ статусом (реєстрація + бронювання), охайно."""
     if d.get("offline"):
         return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
                 "Спробуй пізніше.")
@@ -590,26 +622,29 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
     head = (query if not d.get("found") else (d.get("vehicle") or {}).get("plate")) or query
     if not d.get("found"):
         lines = [f"{semoji} <b>{head}</b>", "━━━━━━━━━━━━",
-                 "Статус: <b>ніколи не реєструвався</b> в реєстрі МВС (з 2013)."]
+                 "🚗 Реєстрація: <b>ніколи не реєструвався</b> (з 2013)",
+                 _booking_line(d)]
         if wanted:
             lines.append("\n🚨 <b>АЛЕ авто Є в розшуку!</b> Деталі — кнопка «🚨 Розшук».")
-        elif _full_plate(query):
-            lines.append("\nЙмовірно <b>вільний</b> — постав на моніторинг, сповіщу про появу 🔔")
+        elif not (d.get("booking") or {}).get("available") and _full_plate(query):
+            lines.append("\n💡 Ймовірно <b>вільний</b> — постав на моніторинг, сповіщу про появу 🔔")
         lines.append("\nОбери, що показати 👇")
         return "\n".join(lines)
     v = d.get("vehicle") or {}
     title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
+    yr = f", {v['make_year']}" if v.get("make_year") else ""
     lines = []
     if wanted:
         lines.append("🚨 <b>УВАГА: авто в розшуку!</b> Деталі — кнопка «🚨 Розшук».\n")
-    lines.append(f"{semoji} Статус: <b>{slabel}</b>")
-    yr = f", {v['make_year']}" if v.get("make_year") else ""
     lines.append(f"🚗 <b>{title}</b>{yr}")
     if v.get("plate"):
         lines.append(f"🔢 {v['plate']}")
+    lines.append("━━━━━━━━━━━━")
+    lines.append(f"{semoji} Реєстрація: <b>{slabel}</b>")
+    lines.append(_booking_line(d))
     mk = d.get("market")
     if mk and (mk.get("median") or mk.get("mean")):
-        lines.append(f"💵 ~${(mk.get('median') or mk.get('mean')):,} (AutoRia)".replace(",", " "))
+        lines.append(f"💵 Ринок (AutoRia): <b>~${(mk.get('median') or mk.get('mean')):,}</b>".replace(",", " "))
     lines.append("\nОбери, що показати 👇")
     return "\n".join(lines)
 
@@ -890,7 +925,7 @@ async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
     elif sec == "roz":
         await show(cq.message.bot, cq.message.chat.id, _fmt_ac_roz(res), _ac_sub_kb(key))
     else:  # sum — назад до короткого екрану з кнопками
-        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_summary(res, key), _ac_menu_kb(res, key))
+        await _show_ac(cq.message.bot, cq.message.chat.id, key, res)
 
 
 async def _create_plate_monitor(bot: Bot, chat_id: int, plate: str) -> None:
@@ -950,7 +985,7 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
         return
     await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
     res = await _autocheck_query(q)
-    await show(message.bot, message.chat.id, _fmt_ac_summary(res, q), _ac_menu_kb(res, q))
+    await _show_ac(message.bot, message.chat.id, q, res)
 
 
 # ── Підбір за комбінацією цифр: доступні / зайняті / вільні (обʼєднання баз) ──
@@ -1297,7 +1332,7 @@ async def cb_cmb_pick(cq: CallbackQuery, state: FSMContext) -> None:
     await cq.answer()
     await show(cq.message.bot, cq.message.chat.id, "🔎 Перевіряю номер…", kb_back())
     res = await _autocheck_query(plate)
-    await show(cq.message.bot, cq.message.chat.id, _fmt_ac_summary(res, plate), _ac_menu_kb(res, plate))
+    await _show_ac(cq.message.bot, cq.message.chat.id, plate, res)
 
 
 # ── Слово на номері (пошук по перших + останніх літерах) ──
@@ -3368,7 +3403,7 @@ async def fallback(message: Message) -> None:
     if plate:
         await show(message.bot, message.chat.id, "🔎 Перевіряю номер у реєстрі МВС…", kb_back())
         res = await _autocheck_query(plate)
-        await show(message.bot, message.chat.id, _fmt_ac_summary(res, plate), _ac_menu_kb(res, plate))
+        await _show_ac(message.bot, message.chat.id, plate, res)
         return
     await render_main(message.bot, message.chat.id)
 
