@@ -108,16 +108,25 @@ def _record(row, src_year):
     )
 
 
+def _zip_data_names(zf):
+    """Імена файлів даних у zip. Не лише .csv — у деяких архівів МВС зіпсована назва
+    (напр. 2019 рік: «…ßsv» замість «.csv»), тож беремо файли за змістом назви, а як
+    нічого не збіглось — усі файли (в цих архівах він лише один)."""
+    names = [n for n in zf.namelist() if not n.endswith("/")]
+    data = [n for n in names if n.lower().endswith(".csv")
+            or "opendata" in n.lower() or "reestr" in n.lower() or "tz_" in n.lower()]
+    return data or names
+
+
 def _iter_csv_streams(path):
-    """Yield (name, text_stream) для кожного CSV — із zip (без розпакування) або прямого .csv."""
+    """Yield (name, text_stream) для кожного файлу даних — із zip (без розпакування) або прямого файлу."""
     low = path.lower()
     if low.endswith(".zip"):
         with zipfile.ZipFile(path) as zf:
-            for n in zf.namelist():
-                if n.lower().endswith(".csv"):
-                    with zf.open(n) as raw:
-                        yield n, io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
-    elif low.endswith(".csv"):
+            for n in _zip_data_names(zf):
+                with zf.open(n) as raw:
+                    yield n, io.TextIOWrapper(raw, encoding="utf-8", errors="replace", newline="")
+    else:
         with open(path, "r", encoding="utf-8", errors="replace", newline="") as fh:
             yield os.path.basename(path), fh
 

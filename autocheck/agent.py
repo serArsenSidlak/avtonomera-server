@@ -92,6 +92,15 @@ def _norm_plate(raw: str):
     return p or None
 
 
+def _zip_data_names(zf):
+    """Файли даних у zip. Деякі архіви МВС мають зіпсовану назву (2019: «…ßsv» замість «.csv»),
+    тож беремо за змістом назви; якщо нічого не збіглось — усі файли (він там лише один)."""
+    names = [n for n in zf.namelist() if not n.endswith("/")]
+    data = [n for n in names if n.lower().endswith(".csv")
+            or "opendata" in n.lower() or "reestr" in n.lower() or "tz_" in n.lower()]
+    return data or names
+
+
 def _int(v: str):
     v = (v or "").strip()
     if not v:
@@ -204,7 +213,7 @@ def _load_all() -> None:
                     zp = os.path.join(tmp, f"{y}.zip")
                     _download(url, zp)
                     with zipfile.ZipFile(zp) as zf:
-                        names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
+                        names = _zip_data_names(zf)
                         zf.extractall(tmp)
                     yr_rows = 0
                     for name in names:
@@ -330,9 +339,8 @@ def _build_local() -> None:
                 streams = []
                 if path.lower().endswith(".zip"):
                     zf = _zip.ZipFile(path)
-                    for n in zf.namelist():
-                        if n.lower().endswith(".csv"):
-                            streams.append(_io.TextIOWrapper(zf.open(n), encoding="utf-8", errors="replace", newline=""))
+                    for n in _zip_data_names(zf):
+                        streams.append(_io.TextIOWrapper(zf.open(n), encoding="utf-8", errors="replace", newline=""))
                 else:
                     streams.append(open(path, encoding="utf-8", errors="replace", newline=""))
                 for st in streams:
