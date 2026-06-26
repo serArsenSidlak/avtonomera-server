@@ -100,6 +100,36 @@ TYPE_SERIES_PREFIX: dict = {
     "Легковий, вантажний": ["кирилична"],
 }
 
+# Додаток 5 (постанова МВС) — ТОЧНІ серії (кінцеві 2 літери) для кожного типу ТЗ.
+_D5_BLOCKS: dict = {
+    "Легковий, вантажний": (
+        "ААВАСАЕАНАІА КАМАРАТАХАОО АВВВСВЕВНВ ІВ КВМВРВ ТВХВОР АСВСССЕСНС ІС КСМСРС ТСХСОТ "
+        "АЕ ВЕ СЕ ЕЕ НЕ ІЕ КЕМЕРЕ ТЕ ХЕОХ АНВНСНЕНННІН КНМНРНТНХН АІ ВІ СІ ЕІ НІ ІІ КІ МІ РІ ТІ ХІ "
+        "АКВКСКЕКНК ІК ККМКРК ТКХК АМВМСМЕМНМІМКМММРМТМХМ АОВОСОЕОНОІО КОМОРОТОХО "
+        "АР ВР СР ЕР НР ІР КР МР РР ТР ХР АТВТ СТ ЕТ НТ ІТ КТМТРТ ТТ ХТ АХВХСХЕХНХІХ КХМХРХТХХХ "
+        "ОА ОВ ОС ОЕ ОН ОІ ОК ОМ"),
+    "Причіп": "XFXGXJXLXNXRXSXUXVXYXZ FF FR FSFUFVFYFZ СFСGСJ СLСNСRСSСUСY FG FJ FL FN",
+    "Електромобіль": (
+        "UAUFUGUHUIUJUKULUMUNUOUP URUSUTUUUХUY QAQBQCQDQEQFQGQHQIQJQKQL QMQNQOQPQQQRQSQTQUQХQY "
+        "ZAZBZCZDZEZFZGZHZI ZJZKZL ZMZNZOZPZRZSZTZUZVZXZYZZ YAYBYCYDYEYFYGYHYIYJYKYL "
+        "YMYNYOYPYRYSYTYUYVYXYYYZ UB UC UD UE"),
+    "Мотоцикл": ("JAJBJCJDJE JFJGJH JI JJ JKJL JMJNJOJPJRJS JTJUJVJXJYJZ "
+                 "LELFLGLHLI LJLKLLLMLNLOLP LRLSLTLULVLXLYLZ"),
+    "Електромотоцикл": ("RARFRGRHRIRJRKRLRMRNRORP RRRSRTRURVRXRYRZ "
+                        "SASBSCSDSESFSGSHSI SJSKSL SMSNSOSPSRSSSTSUSVSXSYSZ"),
+}
+_SERIES_LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н", "I": "І",
+                                 "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
+
+
+def _official_series_for(vtype: str) -> list:
+    """Офіційні серії (кінцеві літери) для типу ТЗ за Додатком 5."""
+    letters = _D5_BLOCKS.get(vtype, "").replace(" ", "")
+    return sorted({letters[i:i + 2].translate(_SERIES_LAT2CYR) for i in range(0, len(letters) - 1, 2)})
+
+
+TYPE_SERIES_OFFICIAL: dict = {vt: _official_series_for(vt) for vt in _D5_BLOCKS}
+
 
 def _region_for_plate(plate: Optional[str]) -> str:
     """Назва регіону за першими 2 літерами номера (код регіону, Додаток 4)."""
@@ -1045,9 +1075,9 @@ async def cb_cmb_oc(cq: CallbackQuery, state: FSMContext) -> None:
 
 @dp.callback_query(F.data == "cmb:free")
 async def cb_cmb_free(cq: CallbackQuery, state: FSMContext) -> None:
-    """Free-builder step 1 — choose vehicle type."""
+    """Free-builder step 1 — choose vehicle type (офіційні типи з Додатку 5)."""
     await cq.answer()
-    types = await db.distinct_vehicle_types()
+    types = list(TYPE_SERIES_OFFICIAL.keys())  # Легковий/вантажний → Причіп → Електро → Мото…
     cf = await _cf(state)
     cf["types"] = types
     await state.update_data(cf=cf)
@@ -1057,7 +1087,7 @@ async def cb_cmb_free(cq: CallbackQuery, state: FSMContext) -> None:
     b.button(text="⬅️ Розділи", callback_data="cmb:cats")
     b.adjust(1)
     await show(cq.message.bot, cq.message.chat.id,
-              "⚪ <b>Підбір вільних</b> · крок 1/2\nОбери тип ТЗ:", b.as_markup())
+              "⚪ <b>Підбір вільних</b> · крок 1/2\n━━━━━━━━━━━━\nОбери тип ТЗ:", b.as_markup())
 
 
 @dp.callback_query(F.data.startswith("cmb:ft:"))
@@ -1080,12 +1110,14 @@ async def cb_cmb_ftype(cq: CallbackQuery, state: FSMContext) -> None:
     b.button(text="⬅️ Розділи", callback_data="cmb:cats")
     b.adjust(2)
     await show(cq.message.bot, cq.message.chat.id,
-              f"⚪ <b>Підбір вільних</b> · крок 2/2\nТип: {cf['ftype']}\nОбери регіон:", b.as_markup())
+              f"⚪ <b>Підбір вільних</b> · крок 2/2\n━━━━━━━━━━━━\nТип: {cf['ftype']}\nОбери регіон:",
+              b.as_markup())
 
 
 @dp.callback_query(F.data.startswith("cmb:fr:"))
 async def cb_cmb_freg(cq: CallbackQuery, state: FSMContext) -> None:
-    """Generate FREE candidates (region-codes × series(type) × digits) minus taken/available."""
+    """Усі можливі номери ЗА ПОСТАНОВОЮ (Додаток 4 коди × Додаток 5 серії × цифри),
+    розкладені на 🟢 в продажу / 🔴 на авто / ⚪ вільні (ще не зустрічались)."""
     parts = cq.data.split(":")
     idx, page = int(parts[2]), int(parts[3])
     await cq.answer()
@@ -1097,33 +1129,38 @@ async def cb_cmb_freg(cq: CallbackQuery, state: FSMContext) -> None:
         await render_combo_cats(cq.message.bot, cq.message.chat.id, state)
         return
     region = regions[idx]
-    if cf.get("free_region") != region or "free" not in cf:
-        await show(cq.message.bot, cq.message.chat.id, "🔎 Підбираю вільні комбінації…", kb_back())
+    if cf.get("free_region") != region:
+        await show(cq.message.bot, cq.message.chat.id, "🔎 Рахую за постановою МВС…", kb_back())
         codes = REGION_SERIES.get(region, [])
-        series = await db.distinct_series_end(vehicle_type=vtype, limit=80)
-        cand = sorted({c + digits + e for c in codes for e in series})
+        series = TYPE_SERIES_OFFICIAL.get(vtype, [])
+        universe = {c + digits + e for c in codes for e in series}
         occ = await _occupied(digits, series=series, regions=codes)
-        occ_set = {o["plate"] for o in occ}
-        av_rows = await db.search_filtered(query=digits, region=region, vehicle_type=vtype,
-                                           limit=1000)
-        av_set = {r["plate_number"] for r in av_rows}
-        free = [c for c in cand if c not in occ_set and c not in av_set]
+        occ_set = {o["plate"] for o in occ} & universe
+        av_rows = await db.search_filtered(query=digits, region=region, vehicle_type=vtype, limit=3000)
+        av_set = {r["plate_number"] for r in av_rows} & universe
+        free = sorted(universe - occ_set - av_set)
         cf["free"] = free
+        cf["free_total"] = len(universe)
+        cf["free_av"] = len(av_set)
+        cf["free_occ"] = len(occ_set)
         cf["free_region"] = region
         await state.update_data(cf=cf)
     free = cf.get("free") or []
     start = page * _CGRID
     chunk = free[start:start + _CGRID]
     has_more = start + _CGRID < len(free)
+    head = (f"⚪ <b>{region} · {vtype}</b> · {digits}\n━━━━━━━━━━━━\n"
+            f"Усього можливих за постановою: <b>{cf.get('free_total', 0)}</b>\n"
+            f"🟢 В продажу: <b>{cf.get('free_av', 0)}</b>\n"
+            f"🔴 На авто: <b>{cf.get('free_occ', 0)}</b>\n"
+            f"⚪ Вільні: <b>{len(free)}</b>\n")
     if not free:
         await show(cq.message.bot, cq.message.chat.id,
-                   f"⚪ Для {region} · {vtype} вільних з комбінацією {digits} не знайшов "
-                   "(усі або в продажу, або зайняті).",
-                   kb_back([("⬅️ Розділи", "cmb:cats")]))
+                   head + "\nВсі можливі — або в продажу, або вже на авто.",
+                   kb_back([("⬅️ Інший регіон", "cmb:free"), ("⬅️ Розділи", "cmb:cats")]))
         return
-    text = (f"⚪ <b>Вільні</b> · {digits}\n{region} · {vtype}\n"
-            f"Знайдено: <b>{len(free)}</b> · стор. {page + 1}\n\nТап → перевірити й поставити полювання 👇")
-    await show(cq.message.bot, cq.message.chat.id, text,
+    await show(cq.message.bot, cq.message.chat.id,
+               head + f"\n⚪ <b>Вільні</b> (тап → постав полювання) · стор. {page + 1} 👇",
                _combo_grid(chunk, f"cmb:fr:{idx}", page, has_more))
 
 
