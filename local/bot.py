@@ -603,31 +603,38 @@ def _reg_status(d: dict) -> tuple:
 
 
 def _booking_line(d: dict) -> str:
-    """Рядок статусу бронювання (доступність у продажу ГСЦ)."""
+    """Чи доступний номер для реєстрації станом на зараз (фід ГСЦ)."""
     bk = d.get("booking") or {}
     if bk.get("available"):
         price = bk.get("price")
-        ptxt = (f" — {int(price):,} грн".replace(",", " ")) if price else ""
-        return f"🏷 Бронювання: 🟢 <b>доступний</b> у продажу{ptxt}"
-    return "🏷 Бронювання: ⚪ <b>не доступний</b> зараз"
+        ptxt = (f" · <b>{int(price):,} грн</b>".replace(",", " ")) if price else ""
+        return f"🏷 Доступний для реєстрації зараз: 🟢 <b>ТАК</b>{ptxt}"
+    return "🏷 Доступний для реєстрації зараз: ⚪ <b>НІ</b> (немає в продажу ГСЦ)"
 
 
 def _fmt_ac_summary(d: dict, query: str) -> str:
-    """Result screen — завжди з ЯВНИМ статусом (реєстрація + бронювання), охайно."""
+    """Result screen — завжди явні статуси: реєстрація в МВС + доступність для реєстрації."""
     if d.get("offline"):
         return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
                 "Спробуй пізніше.")
     wanted = d.get("wanted") or []
     status, semoji, slabel = _reg_status(d)
     head = (query if not d.get("found") else (d.get("vehicle") or {}).get("plate")) or query
+    region = _region_for_plate(head)
+    avail = (d.get("booking") or {}).get("available")
     if not d.get("found"):
-        lines = [f"{semoji} <b>{head}</b>", "━━━━━━━━━━━━",
-                 "🚗 Реєстрація: <b>ніколи не реєструвався</b> (з 2013)",
-                 _booking_line(d)]
+        lines = [f"{semoji} <b>{head}</b>", "━━━━━━━━━━━━"]
+        if region:
+            lines.append(f"📍 Регіон: {region}")
+        lines.append("🚗 У реєстрі МВС: <b>ніколи не реєструвався</b> (з 2013)")
+        lines.append(_booking_line(d))
         if wanted:
             lines.append("\n🚨 <b>АЛЕ авто Є в розшуку!</b> Деталі — кнопка «🚨 Розшук».")
-        elif not (d.get("booking") or {}).get("available") and _full_plate(query):
-            lines.append("\n💡 Ймовірно <b>вільний</b> — постав на моніторинг, сповіщу про появу 🔔")
+        elif avail:
+            lines.append("\n✅ Номер <b>вільний і у продажу</b> — можна зареєструвати вже зараз!")
+        elif _full_plate(query):
+            lines.append("\n💡 Номер <b>вільний</b>, але зараз його немає в продажу.\n"
+                         "Постав на моніторинг — сповіщу, щойно зʼявиться 🔔")
         lines.append("\nОбери, що показати 👇")
         return "\n".join(lines)
     v = d.get("vehicle") or {}
@@ -638,9 +645,9 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
         lines.append("🚨 <b>УВАГА: авто в розшуку!</b> Деталі — кнопка «🚨 Розшук».\n")
     lines.append(f"🚗 <b>{title}</b>{yr}")
     if v.get("plate"):
-        lines.append(f"🔢 {v['plate']}")
+        lines.append(f"🔢 {v['plate']}" + (f"  ·  📍 {region}" if region else ""))
     lines.append("━━━━━━━━━━━━")
-    lines.append(f"{semoji} Реєстрація: <b>{slabel}</b>")
+    lines.append(f"{semoji} У реєстрі МВС: <b>{slabel}</b>")
     lines.append(_booking_line(d))
     mk = d.get("market")
     if mk and (mk.get("median") or mk.get("mean")):
