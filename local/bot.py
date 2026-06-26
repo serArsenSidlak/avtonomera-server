@@ -1034,6 +1034,7 @@ async def do_combo(message: Message, state: FSMContext) -> None:
 
 
 _ALL_SERIES = sorted({e for lst in TYPE_SERIES_OFFICIAL.values() for e in lst})
+_ALL_REGION_CODES = sorted({c for codes in REGION_SERIES.values() for c in codes})
 
 
 def _combo_scope(cf: dict):
@@ -1060,22 +1061,11 @@ async def render_combo_cats(bot: Bot, chat_id: int, state: FSMContext) -> None:
         cf["occ"] = await _occupied(digits, series=series, regions=codes)
         cf["occ_key"] = okey
     occ = cf.get("occ") or []
-    free_n = None
-    if region:  # вільні рахуємо лише коли заданий регіон (інакше всесвіт завеликий)
-        ser = series or _ALL_SERIES
-        universe = {c + digits + e for c in codes for e in ser}
-        av_rows = await db.search_filtered(query=digits, region=region, vehicle_type=vtype, limit=3000)
-        av_set = {r["plate_number"] for r in av_rows} & universe
-        occ_set = {o["plate"] for o in occ} & universe
-        cf["free"] = sorted(universe - av_set - occ_set)
-        cf["free_total"] = len(universe)
-        free_n = len(cf["free"])
     await state.update_data(cf=cf)
     flt = f"🚗 {vtype or 'всі типи'}  ·  🌍 {region or 'всі регіони'}"
     lines = [f"🔢 <b>Комбінація {digits}</b>", "━━━━━━━━━━━━", f"<i>{flt}</i>", "",
              f"🟢 В продажу: <b>{av_total}</b>", f"🔴 На авто: <b>{len(occ)}</b>",
-             (f"⚪ Вільні: <b>{free_n}</b>" if free_n is not None else "⚪ Вільні: <i>обери регіон</i>"),
-             "\nОбери розділ або зміни фільтр 👇"]
+             "⚪ Вільні — обери серію нижче", "\nОбери розділ або зміни фільтр 👇"]
     b = InlineKeyboardBuilder()
     rows = []
     cat = 0
@@ -1087,9 +1077,8 @@ async def render_combo_cats(bot: Bot, chat_id: int, state: FSMContext) -> None:
         cat += 1
     if cat:
         rows.append(cat)
-    if free_n:
-        b.button(text=f"⚪ Вільні ({free_n}) — обрати серію", callback_data="cmb:free")
-        rows.append(1)
+    b.button(text="⚪ Вільні — обрати серію", callback_data="cmb:free")
+    rows.append(1)
     b.button(text=f"🚗 Тип: {vtype or 'всі'}", callback_data="cmb:settype")
     b.button(text=f"🌍 Регіон: {region or 'всі'}", callback_data="cmb:setreg")
     rows.append(2)
@@ -1204,23 +1193,31 @@ async def cb_cmb_sr(cq: CallbackQuery, state: FSMContext) -> None:
 
 @dp.callback_query(F.data == "cmb:free")
 async def cb_cmb_free(cq: CallbackQuery, state: FSMContext) -> None:
-    """Крок «вибір серії»: спершу серія (код регіону), потім повні номери."""
+    """Крок «вибір серії»: усі доступні серії з постанови (+ власна), потім повні номери."""
     await cq.answer()
     cf = await _cf(state)
     region = cf.get("region")
-    if not region:  # серія = код регіону, тож регіон треба задати
-        await cb_cmb_setreg(cq, state)
-        return
-    codes = REGION_SERIES.get(region, [])
+    own = REGION_SERIES.get(region, []) if region else []
+    rest = [c for c in _ALL_REGION_CODES if c not in own]
     b = InlineKeyboardBuilder()
-    for c in codes:
+    rows = []
+    if own:  # коди обраного регіону — першими
+        for c in own:
+            b.button(text=f"⭐ {c}", callback_data=f"cmb:ps:{c}:0")
+        rows.append(len(own))
+    for c in rest:  # решта серій за постановою
         b.button(text=c, callback_data=f"cmb:ps:{c}:0")
+    full = len(rest)
+    rows += [4] * (full // 4) + ([full % 4] if full % 4 else [])
     b.button(text="⌨️ Інша серія", callback_data="cmb:psother")
     b.button(text="⬅️ Розділи", callback_data="cmb:cats")
-    b.adjust(2)
+    rows.append(2)
+    b.adjust(*rows)
+    hint = f"{region}\n\n" if region else ""
     await show(cq.message.bot, cq.message.chat.id,
-              f"⚪ <b>Вільні</b> · {cf.get('digits')}\n━━━━━━━━━━━━\n{region}\n\n"
-              "Обери <b>серію</b> (код регіону) — потім покажу повні вільні номери:", b.as_markup())
+              f"⚪ <b>Вільні</b> · {cf.get('digits')}\n━━━━━━━━━━━━\n{hint}"
+              "Обери <b>серію</b> (код регіону) — потім покажу повні вільні номери цієї серії:",
+              b.as_markup())
 
 
 async def _render_free_for_prefix(bot: Bot, chat_id: int, state: FSMContext, prefix: str,
