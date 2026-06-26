@@ -551,7 +551,8 @@ def _full_plate(text: str) -> Optional[str]:
     from local.plate import normalize_plate
 
     p = normalize_plate(text or "")
-    return p if _re.fullmatch(r"[А-ЯІЇЄҐ]{2}\d{4}[А-ЯІЇЄҐ]{2}", p) else None
+    # літери: кирилиця + латиниця (електро/спец-серії типу Y,Z,U,Q,R,S,F… лишаються латиницею)
+    return p if _re.fullmatch(r"[A-ZА-ЯІЇЄҐ]{2}\d{4}[A-ZА-ЯІЇЄҐ]{2}", p) else None
 
 
 def _fmt_date(iso: Optional[str]) -> str:
@@ -561,34 +562,50 @@ def _fmt_date(iso: Optional[str]) -> str:
     return iso or "—"
 
 
+_DEREG_KW = ("ЗНЯТ", "ВИБРАКУ", "УТИЛІЗ", "ВИВЕЗЕ", "ПРИПИНЕ", "ВКРАДЕ", "РОЗУКОМПЛЕКТ", "ЗА КОРДОН")
+
+
+def _reg_status(d: dict) -> tuple:
+    """('never'|'active'|'dereg', emoji, label) — статус реєстрації номера/авто."""
+    if not d.get("found"):
+        return ("never", "⚪", "ніколи не реєструвався")
+    h = d.get("history") or []
+    last_op = (h[0].get("oper_name") or "").upper() if h else ""
+    if any(k in last_op for k in _DEREG_KW):
+        return ("dereg", "⚠️", "знятий з обліку (зараз не зареєстрований)")
+    return ("active", "✅", "зареєстрований")
+
+
 def _fmt_ac_summary(d: dict, query: str) -> str:
-    """Minimal result screen — identification + a hint to use the section buttons."""
+    """Result screen — завжди з ЯВНИМ статусом номера + ідентифікація + кнопки."""
     if d.get("offline"):
         return ("⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено або не підключений).\n"
                 "Спробуй пізніше.")
     wanted = d.get("wanted") or []
-    if not d.get("found") and not wanted:
-        fp = _full_plate(query)
-        if fp:
-            return (f"🔍 Номер <b>{fp}</b> у реєстрі МВС <b>не значиться</b> — з 2013 року на ньому "
-                    "не реєстрували авто.\n\nЙмовірно, він <b>вільний</b>. Постав його на моніторинг — "
-                    "і я сповіщу, щойно він зʼявиться в продажу 👇")
-        return (f"🔍 За запитом <b>{query}</b> у реєстрі МВС нічого не знайдено.\n\n"
-                "<i>Перевір правильність номера/VIN. У базі — операції з 2013 року.</i>")
+    status, semoji, slabel = _reg_status(d)
+    head = (query if not d.get("found") else (d.get("vehicle") or {}).get("plate")) or query
+    if not d.get("found"):
+        lines = [f"{semoji} <b>{head}</b>", "━━━━━━━━━━━━",
+                 "Статус: <b>ніколи не реєструвався</b> в реєстрі МВС (з 2013)."]
+        if wanted:
+            lines.append("\n🚨 <b>АЛЕ авто Є в розшуку!</b> Деталі — кнопка «🚨 Розшук».")
+        elif _full_plate(query):
+            lines.append("\nЙмовірно <b>вільний</b> — постав на моніторинг, сповіщу про появу 🔔")
+        lines.append("\nОбери, що показати 👇")
+        return "\n".join(lines)
     v = d.get("vehicle") or {}
     title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
     lines = []
     if wanted:
         lines.append("🚨 <b>УВАГА: авто в розшуку!</b> Деталі — кнопка «🚨 Розшук».\n")
-    lines.append(f"✅ Знайдено за запитом <b>{query}</b>:")
-    if d.get("found"):
-        yr = f", {v['make_year']}" if v.get("make_year") else ""
-        lines.append(f"🚗 <b>{title}</b>{yr}")
-        if v.get("plate"):
-            lines.append(f"🔢 {v['plate']}")
-        mk = d.get("market")
-        if mk and (mk.get("median") or mk.get("mean")):
-            lines.append(f"💵 ~${(mk.get('median') or mk.get('mean')):,} (AutoRia)".replace(",", " "))
+    lines.append(f"{semoji} Статус: <b>{slabel}</b>")
+    yr = f", {v['make_year']}" if v.get("make_year") else ""
+    lines.append(f"🚗 <b>{title}</b>{yr}")
+    if v.get("plate"):
+        lines.append(f"🔢 {v['plate']}")
+    mk = d.get("market")
+    if mk and (mk.get("median") or mk.get("mean")):
+        lines.append(f"💵 ~${(mk.get('median') or mk.get('mean')):,} (AutoRia)".replace(",", " "))
     lines.append("\nОбери, що показати 👇")
     return "\n".join(lines)
 
@@ -601,7 +618,8 @@ def _fmt_ac_reg(d: dict) -> str:
     if not v:
         return "📋 <b>Держреєстрація</b>\n\nДані відсутні."
     title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
-    lines = ["📋 <b>Держреєстрація</b>\n", f"🚗 <b>{title}</b>"]
+    _, semoji, slabel = _reg_status(d)
+    lines = ["📋 <b>Держреєстрація</b>", f"{semoji} Статус: <b>{slabel}</b>\n", f"🚗 <b>{title}</b>"]
     if v.get("make_year"):
         lines.append(f"📅 Рік випуску: <b>{v['make_year']}</b>")
     spec = []
