@@ -23,7 +23,7 @@ app.add_middleware(
 PAGE = 20
 
 # Public endpoints that never require the app key.
-_OPEN_PATHS = {"/health", "/open"}
+_OPEN_PATHS = {"/health", "/open", "/pitch"}
 # Simple in-memory per-IP rate limiter (one uvicorn worker). minute-bucket -> {ip: count}.
 _rate_bucket: dict = {}
 _rate_minute: list = [0]
@@ -124,6 +124,111 @@ async def health() -> dict:
 # Expo Go tunnel deep-link (update if the tunnel restarts).
 EXPO_URL = "exp://bah32_a-anonymous-8081.exp.direct"
 
+_PITCH_HTML = '''<!doctype html><html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>База Автономерів — презентація проєкту</title>
+<meta property="og:title" content="🇺🇦 База Автономерів">
+<meta property="og:description" content="Знайди свій номер. Перевір будь-яке авто. Усе про автономери України — на відкритих даних.">
+<meta name="theme-color" content="#0b0e14">
+<style>
+:root{--bg:#0b0e14;--card:#161b24;--line:#222a36;--text:#f1f4f9;--sub:#8b95a7;--blue:#3b82f6;--green:#22c55e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:880px;margin:0 auto;padding:0 20px}
+.hero{position:relative;overflow:hidden;padding:88px 0 64px;text-align:center;background:radial-gradient(1200px 500px at 50% -10%,rgba(59,130,246,.28),transparent 60%)}
+.flag{display:inline-flex;width:64px;height:64px;border-radius:20px;align-items:center;justify-content:center;font-size:30px;background:linear-gradient(135deg,#0057b7,#0057b7 50%,#ffd700 50%,#ffd700);margin-bottom:22px}
+.hero h1{font-size:clamp(38px,8vw,62px);font-weight:900;letter-spacing:-1px;line-height:1.05}
+.hero .tag{margin-top:18px;font-size:clamp(17px,3.4vw,22px);color:#cdd6e6;max-width:620px;margin-left:auto;margin-right:auto}
+.kick{margin-top:26px;display:inline-block;padding:9px 16px;border-radius:999px;background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--sub);font-size:13px}
+section{padding:54px 0;border-top:1px solid var(--line)}
+.eyebrow{color:var(--blue);font-weight:800;letter-spacing:2px;text-transform:uppercase;font-size:12px;margin-bottom:14px}
+h2{font-size:clamp(26px,5vw,38px);font-weight:900;letter-spacing:-.5px;margin-bottom:16px}
+.lead{font-size:clamp(17px,3.2vw,20px);color:#d4dbe8}
+.soul{font-size:clamp(19px,3.6vw,24px);font-weight:600;color:#eef2f9;line-height:1.5}
+.soul b{color:#ffd700;font-weight:800}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;margin-top:26px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+.tile{border-radius:20px;padding:22px;min-height:170px;display:flex;flex-direction:column;justify-content:flex-end;color:#fff}
+.t1{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}.t2{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
+.t3{background:linear-gradient(135deg,#14b8a6,#0f766e)}.t4{background:linear-gradient(135deg,#f59e0b,#b45309)}
+.tile .ic{font-size:30px;margin-bottom:auto}.tile h3{font-size:21px;font-weight:900;margin-top:14px}.tile p{font-size:14px;opacity:.92;margin-top:4px}
+.stats{display:flex;gap:14px;flex-wrap:wrap;margin-top:24px}
+.stat{flex:1;min-width:140px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;text-align:center}
+.stat b{display:block;font-size:30px;font-weight:900}.stat span{color:var(--sub);font-size:13px}
+.note{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:22px;margin-top:24px}
+.cta{text-align:center;padding:64px 0 30px}
+.btn{display:inline-block;background:var(--blue);color:#fff;text-decoration:none;font-weight:800;font-size:17px;padding:15px 30px;border-radius:14px;margin:8px}
+.btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+footer{color:var(--sub);font-size:13px;text-align:center;padding:30px 0 50px}
+.pills{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:20px}
+.pill{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:8px 15px;font-size:13px;color:#cdd6e6}
+</style></head><body>
+
+<div class="hero"><div class="wrap">
+  <div class="flag">🚘</div>
+  <h1>База&nbsp;Автономерів</h1>
+  <p class="tag">Знайди свій номер. Перевір будь-яке авто. Усе про автономери України — в одному місці.</p>
+  <div class="kick">🇺🇦 на відкритих державних даних · без зливів · без персональних даних</div>
+</div></div>
+
+<div class="wrap">
+
+<section>
+  <div class="eyebrow">Душа проєкту</div>
+  <p class="soul">Номер на авто — це маленька історія. Чиїсь цифри, дата народження сина, дзеркальна краса, або просто бажання <b>не купити кота в мішку</b> перед покупкою авто.<br><br>
+  Раніше це були два різні світи: «де знайти красивий вільний номер» і «чи чесне це авто». Ми зібрали їх разом — <b>чесно, легально, прозоро</b>.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Ідея</div>
+  <h2>Єдина платформа про номери</h2>
+  <p class="lead">Каталог вільних номерів, перевірка будь-якого авто за номером чи VIN, підбір красивих комбінацій і моніторинг їх появи. У базі — <b>усі</b> номери: і зайняті на авто, і вільні для реєстрації. Telegram-бот уже працює, iOS-додаток — у розробці.</p>
+  <div class="stats">
+    <div class="stat"><b>20M+</b><span>записів реєстру МВС</span></div>
+    <div class="stat"><b>25</b><span>областей України</span></div>
+    <div class="stat"><b style="color:var(--green)">∞</b><span>комбінацій під полювання</span></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Що вміє</div>
+  <h2>Функції</h2>
+  <div class="grid">
+    <div class="tile t1"><div class="ic">🚗</div><h3>Перевірка авто</h3><p>Номер або VIN: марка, рік, паливо, історія реєстрацій, ринкова ціна, статус розшуку.</p></div>
+    <div class="tile t2"><div class="ic">🔢</div><h3>Підбір комбінації</h3><p>Вводиш цифри — бачиш, що доступне в продажу, що зайняте на авто, а що ще вільне.</p></div>
+    <div class="tile t3"><div class="ic">🔍</div><h3>Каталог номерів</h3><p>Пошук по всій базі: серія, регіон, ціна, красиві та дзеркальні комбінації.</p></div>
+    <div class="tile t4"><div class="ic">🔔</div><h3>Моніторинг</h3><p>Постав номер на стеження — сповіщу тієї ж миті, щойно він зʼявиться у продажу.</p></div>
+  </div>
+</section>
+
+<section>
+  <div class="eyebrow">Чесність даних</div>
+  <h2>Тільки відкрите. Тільки легальне.</h2>
+  <p class="lead">Усе будується виключно на відкритих державних даних (data.gov.ua): реєстр транспортних засобів МВС, база авто в розшуку, відкриті «краєвидні» номери ГСЦ. <b>Жодних зливів баз. Жодних персональних даних.</b> Прозорість — частина ідеї.</p>
+</section>
+
+<section>
+  <div class="eyebrow">Запрошення</div>
+  <h2>Шукаємо дизайнерів і критиків</h2>
+  <p class="lead">Зараз це темна тема, українські акценти, градієнтні плитки — міцний фундамент. Але ми хочемо більшого: щоб <b>кожна функція виділялась</b>, кожен екран був приємний оку, а перший дотик — закохував.<br><br>
+  Якщо ти дизайнер, критик або просто небайдужий — долучайся. Критикуй гостро, пропонуй сміливо, твори разом. Цей проєкт робиться з душею, і ми раді кожному, хто зробить його красивішим.</p>
+  <div class="pills"><span class="pill">🎨 UI / UX</span><span class="pill">🧭 Продукт</span><span class="pill">✍️ Копірайт</span><span class="pill">🧪 Критика</span><span class="pill">📱 iOS / Expo</span></div>
+</section>
+
+</div>
+
+<div class="cta wrap">
+  <h2>Долучайся до бази</h2>
+  <p class="lead" style="max-width:560px;margin:14px auto 0">Спробуй у Telegram уже зараз — і скажи, що зробив би краще.</p>
+  <div style="margin-top:24px">
+    <a class="btn" href="https://t.me/nomer_na_avto_bot">▶️ Відкрити Telegram-бот</a>
+    <a class="btn ghost" href="/open">📱 iOS (Expo Go)</a>
+  </div>
+</div>
+
+<footer>База Автономерів · зроблено в Україні з 🤍💙💛 · усі дані — відкриті (data.gov.ua)</footer>
+</body></html>'''
+
 
 @app.get("/open", response_class=HTMLResponse)
 async def open_app() -> str:
@@ -146,6 +251,12 @@ p{{color:#9aa4b2}}</style></head><body>
 <p style="margin-top:30px;font-size:13px">Якщо не відкрилось — встанови «Expo Go» з App Store і натисни ще раз.</p>
 <script>setTimeout(function(){{window.location.href="{expo_url}";}}, 600);</script>
 </body></html>"""
+
+
+@app.get("/pitch", response_class=HTMLResponse)
+async def pitch() -> str:
+    """Публічна сторінка-презентація проєкту (для дизайнерів, критиків, інвесторів)."""
+    return _PITCH_HTML
 
 
 @app.get("/stats")
