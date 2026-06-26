@@ -852,14 +852,24 @@ async def autocheck_agent_status() -> dict:
             "seconds_ago": round(ago, 1) if ago is not None else None}
 
 
-async def _ac_query_agent(plate, vin):
-    """Поставити запит у чергу для PC-агента і дочекатись результату (None при таймауті)."""
+async def _ac_query_agent(plate=None, vin=None, digits=None, series=None, regions=None):
+    """Поставити запит у чергу для PC-агента і дочекатись результату (None при таймауті).
+
+    Або точковий пошук (plate/vin), або «зайняті за комбінацією» (digits + опц. series/regions).
+    """
     import asyncio
 
     with _ac_qlock:
         rid = str(_AC_NEXT[0])
         _AC_NEXT[0] += 1
-        _AC_QUEUE.append({"id": rid, "plate": plate or "", "vin": vin or ""})
+        req = {"id": rid, "plate": plate or "", "vin": vin or ""}
+        if digits:
+            req["digits"] = digits
+            if series:
+                req["series"] = series
+            if regions:
+                req["regions"] = regions
+        _AC_QUEUE.append(req)
     for _ in range(80):  # ~20с
         await asyncio.sleep(0.25)
         with _ac_qlock:
@@ -871,6 +881,58 @@ async def _ac_query_agent(plate, vin):
                 _AC_QUEUE.pop(i)
                 break
     return None
+
+
+def _ac_occupied_local(digits, series=None, regions=None, limit=400):
+    """Зайняті номери з комбінацією — по локальній тестовій БД (LIKE по номеру)."""
+    if not _os.path.exists(_AC_DB) or not (digits or "").strip():
+        return []
+    con = _sqlite3.connect(_AC_DB)
+    con.row_factory = _sqlite3.Row
+    try:
+        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v'").fetchone():
+            return []
+        rows = con.execute(
+            "SELECT plate, vin, brand, model, make_year FROM v WHERE plate LIKE ?",
+            (f"__{digits}__",)).fetchall()
+    finally:
+        con.close()
+    best = {}
+    for r in rows:
+        p = r["plate"]
+        if not p or len(p) < 8:
+            continue
+        le = p[6:8]
+        ls = p[0:2]
+        if series and le not in series:
+            continue
+        if regions and ls not in regions:
+            continue
+        best[p] = r  # тестова БД — без надійного порядку, лишаємо останній
+    out = [{"plate": p, "vin": r["vin"], "brand": r["brand"], "model": r["model"],
+            "make_year": r["make_year"]} for p, r in best.items()]
+    out.sort(key=lambda x: x["plate"])
+    return out[:limit]
+
+
+@app.get("/autocheck/occupied")
+async def autocheck_occupied(digits: str, series: str = "", regions: str = ""):
+    """Зайняті (зареєстровані) номери із заданою комбінацією цифр (+ опц. серія/регіон)."""
+    import asyncio
+    import time as _time
+
+    digits = (digits or "").strip()
+    if not digits.isdigit():
+        raise HTTPException(400, "digits required")
+    ser = [s for s in series.split(",") if s] or None
+    reg = [r for r in regions.split(",") if r] or None
+    res = None
+    if _AC_AGENT["seen"] and (_time.time() - _AC_AGENT["seen"] < 35):
+        res = await _ac_query_agent(digits=digits, series=ser, regions=reg)
+    if res is not None and "occupied" in res:
+        return {"occupied": res["occupied"]}
+    occ = await asyncio.to_thread(_ac_occupied_local, digits, ser, reg)
+    return {"occupied": occ}
 
 
 @app.post("/autocheck/load-test")

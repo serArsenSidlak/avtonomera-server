@@ -395,6 +395,39 @@ def _lookup(plate=None, vin=None) -> dict:
     return {"found": True, "vehicle": veh, "first_reg": first_reg, "history": history}
 
 
+def _lookup_digits(digits, series=None, regions=None, limit=400) -> list:
+    """Зайняті номери із заданою комбінацією цифр (+ опц. серія/регіон). Кожен → поточне авто."""
+    digits = (digits or "").strip()
+    if not digits:
+        return []
+    q = ("SELECT plate, vin, brand, model, make_year, letters_start, letters_end, src_year, d_reg "
+         "FROM vehicle_ops WHERE digits=?")
+    params = [digits]
+    if series:
+        q += " AND letters_end IN (%s)" % ",".join("?" * len(series))
+        params += list(series)
+    if regions:
+        q += " AND letters_start IN (%s)" % ",".join("?" * len(regions))
+        params += list(regions)
+    con = _connect()
+    try:
+        rows = con.execute(q, params).fetchall()
+    finally:
+        con.close()
+    best = {}  # plate → (sort_key, row) — найсвіжіша операція = поточне авто
+    for r in rows:
+        p = r["plate"]
+        if not p:
+            continue
+        key = (r["src_year"] or 0, r["d_reg"] or "")
+        if p not in best or key > best[p][0]:
+            best[p] = (key, r)
+    out = [{"plate": p, "vin": r["vin"], "brand": r["brand"], "model": r["model"],
+            "make_year": r["make_year"]} for p, (k, r) in best.items()]
+    out.sort(key=lambda x: x["plate"])
+    return out[:limit]
+
+
 def _poll_once() -> bool:
     """Один цикл: спитати сервер про запит у черзі, відповісти на нього. True — якщо обробив запит."""
     body = json.dumps({"secret": SECRET}).encode("utf-8")
@@ -406,7 +439,11 @@ def _poll_once() -> bool:
     if not rq:
         return False
     try:
-        result = _lookup(plate=rq.get("plate") or None, vin=rq.get("vin") or None)
+        if rq.get("digits"):  # запит «зайняті за комбінацією»
+            occ = _lookup_digits(rq.get("digits"), rq.get("series"), rq.get("regions"))
+            result = {"found": bool(occ), "occupied": occ}
+        else:
+            result = _lookup(plate=rq.get("plate") or None, vin=rq.get("vin") or None)
     except Exception as exc:  # noqa: BLE001
         result = {"found": False, "error": str(exc)}
     out = json.dumps({"secret": SECRET, "id": rq.get("id"), "result": result}).encode("utf-8")
