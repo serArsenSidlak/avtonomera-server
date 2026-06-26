@@ -559,7 +559,8 @@ async def _booking_status(plate: Optional[str]) -> Optional[dict]:
     avail = [l for l in locs if l.get("is_available")]
     if avail:
         a = avail[0]
-        return {"available": True, "price": a.get("price"), "region": a.get("region")}
+        return {"available": True, "price": a.get("price"), "region": a.get("region"),
+                "last_seen": a.get("last_seen_at")}
     return {"available": False}
 
 
@@ -608,7 +609,9 @@ def _booking_line(d: dict) -> str:
     if bk.get("available"):
         price = bk.get("price")
         ptxt = (f" · <b>{int(price):,} грн</b>".replace(",", " ")) if price else ""
-        return f"🏷 Доступний для реєстрації зараз: 🟢 <b>ТАК</b>{ptxt}"
+        seen = bk.get("last_seen")
+        conf = f"\n   <i>підтверджено {_fmt_dt(seen)[:10]} (свіжість залежить від останнього скану)</i>" if seen else ""
+        return f"🏷 Доступний для реєстрації: 🟢 <b>ТАК</b>{ptxt}{conf}"
     return "🏷 Доступний для реєстрації зараз: ⚪ <b>НІ</b> (немає в продажу ГСЦ)"
 
 
