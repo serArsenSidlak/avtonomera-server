@@ -785,6 +785,18 @@ def _ac_sub_kb(primary_key: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+def _ac_vin_kb(vin: str) -> InlineKeyboardMarkup:
+    """VIN-history view: deep-link to AutoRia VIN search (free) + back + menu."""
+    from urllib.parse import quote
+
+    b = InlineKeyboardBuilder()
+    b.button(text="🔎 Цей VIN на AutoRia", url=f"https://auto.ria.com/uk/search/?text={quote(vin)}")
+    b.button(text="⬅️ Назад", callback_data=f"ac:sum:{vin}")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    b.adjust(1, 2)
+    return b.as_markup()
+
+
 @dp.callback_query(F.data.startswith("ac:"))
 async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
     """Reveal one AutoCheck section on tap: reg / roz / plate-hist / vin-hist / back to summary."""
@@ -801,7 +813,7 @@ async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
         return
     if sec == "vin":
         res = await _ac_get("vin", key)
-        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, "vin", key), _ac_sub_kb(key))
+        await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, "vin", key), _ac_vin_kb(key))
         return
     # reg / roz / sum — повний lookup за ключем (поточне авто + розшук)
     param, val = _ac_detect(key)
