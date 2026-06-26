@@ -167,6 +167,7 @@ class Flow(StatesGroup):
     acheck = State()
     word = State()
     combo = State()
+    combo_series = State()
     endseries = State()
     admin_addadmin = State()
     admin_broadcast = State()
@@ -1087,7 +1088,7 @@ async def render_combo_cats(bot: Bot, chat_id: int, state: FSMContext) -> None:
     if cat:
         rows.append(cat)
     if free_n:
-        b.button(text=f"⚪ Вільні ({free_n})", callback_data="cmb:fr:0")
+        b.button(text=f"⚪ Вільні ({free_n}) — обрати серію", callback_data="cmb:free")
         rows.append(1)
     b.button(text=f"🚗 Тип: {vtype or 'всі'}", callback_data="cmb:settype")
     b.button(text=f"🌍 Регіон: {region or 'всі'}", callback_data="cmb:setreg")
@@ -1201,30 +1202,98 @@ async def cb_cmb_sr(cq: CallbackQuery, state: FSMContext) -> None:
     await render_combo_cats(cq.message.bot, cq.message.chat.id, state)
 
 
-@dp.callback_query(F.data.startswith("cmb:fr:"))
-async def cb_cmb_freg(cq: CallbackQuery, state: FSMContext) -> None:
-    """⚪ Вільні (за постановою, мінус у продажу/на авто) — список з cf['free']."""
-    page = int(cq.data.split(":")[2])
+@dp.callback_query(F.data == "cmb:free")
+async def cb_cmb_free(cq: CallbackQuery, state: FSMContext) -> None:
+    """Крок «вибір серії»: спершу серія (код регіону), потім повні номери."""
     await cq.answer()
     cf = await _cf(state)
-    if not cf.get("region"):  # вільні потребують регіону → назад до екрана
-        await render_combo_cats(cq.message.bot, cq.message.chat.id, state)
+    region = cf.get("region")
+    if not region:  # серія = код регіону, тож регіон треба задати
+        await cb_cmb_setreg(cq, state)
         return
+    codes = REGION_SERIES.get(region, [])
+    b = InlineKeyboardBuilder()
+    for c in codes:
+        b.button(text=c, callback_data=f"cmb:ps:{c}:0")
+    b.button(text="⌨️ Інша серія", callback_data="cmb:psother")
+    b.button(text="⬅️ Розділи", callback_data="cmb:cats")
+    b.adjust(2)
+    await show(cq.message.bot, cq.message.chat.id,
+              f"⚪ <b>Вільні</b> · {cf.get('digits')}\n━━━━━━━━━━━━\n{region}\n\n"
+              "Обери <b>серію</b> (код регіону) — потім покажу повні вільні номери:", b.as_markup())
+
+
+async def _render_free_for_prefix(bot: Bot, chat_id: int, state: FSMContext, prefix: str,
+                                  page: int = 0) -> None:
+    """Повні вільні номери для конкретної серії (префікса): prefix + цифри + кінцеві серії."""
+    cf = await _cf(state)
+    digits = cf.get("digits")
+    if not digits or not prefix:
+        await render_combo_cats(bot, chat_id, state)
+        return
+    vtype = cf.get("vtype")
+    if cf.get("free_prefix") != prefix:
+        await show(bot, chat_id, "🔎 Рахую вільні номери…", kb_back())
+        endings = TYPE_SERIES_OFFICIAL.get(vtype) if vtype else _ALL_SERIES
+        universe = {prefix + digits + e for e in endings}
+        occ = await _occupied(digits, series=endings, regions=[prefix])
+        occ_set = {o["plate"] for o in occ} & universe
+        av_rows = await db.search_filtered(query=digits, letters_start=prefix, vehicle_type=vtype, limit=3000)
+        av_set = {r["plate_number"] for r in av_rows} & universe
+        cf["free"] = sorted(universe - occ_set - av_set)
+        cf["free_total"] = len(universe)
+        cf["free_av"] = len(av_set)
+        cf["free_occ"] = len(occ_set)
+        cf["free_prefix"] = prefix
+        await state.update_data(cf=cf)
     free = cf.get("free") or []
     start = page * _CGRID
     chunk = free[start:start + _CGRID]
     has_more = start + _CGRID < len(free)
-    region, vtype, _, _ = _combo_scope(cf)
-    head = (f"⚪ <b>Вільні</b> · {cf.get('digits')}\n{vtype or 'всі типи'} · {region}\n"
-            f"Можливих: <b>{cf.get('free_total', 0)}</b> · вільних: <b>{len(free)}</b>\n")
+    head = (f"⚪ <b>Серія {prefix}</b> · {digits} · {vtype or 'всі типи'}\n━━━━━━━━━━━━\n"
+            f"Усього номерів: <b>{cf.get('free_total', 0)}</b>\n"
+            f"🟢 В продажу: <b>{cf.get('free_av', 0)}</b> · 🔴 На авто: <b>{cf.get('free_occ', 0)}</b> · "
+            f"⚪ Вільні: <b>{len(free)}</b>\n")
     if not free:
-        await show(cq.message.bot, cq.message.chat.id,
-                   head + "\nУсі можливі — або в продажу, або вже на авто.",
-                   kb_back([("⬅️ Розділи", "cmb:cats")]))
+        await show(bot, chat_id, head + "\nУсі номери цієї серії — або в продажу, або на авто.",
+                   kb_back([("⬅️ Інша серія", "cmb:free"), ("⬅️ Розділи", "cmb:cats")]))
         return
+    await show(bot, chat_id, head + f"\n⚪ Тап → постав полювання · стор. {page + 1} 👇",
+               _combo_grid(chunk, f"cmb:ps:{prefix}", page, has_more))
+
+
+@dp.callback_query(F.data.startswith("cmb:ps:"))
+async def cb_cmb_ps(cq: CallbackQuery, state: FSMContext) -> None:
+    """Picked a series prefix → show its full free numbers (paginated)."""
+    parts = cq.data.split(":")
+    prefix, page = parts[2], int(parts[3])
+    await cq.answer()
+    await _render_free_for_prefix(cq.message.bot, cq.message.chat.id, state, prefix, page)
+
+
+@dp.callback_query(F.data == "cmb:psother")
+async def cb_cmb_psother(cq: CallbackQuery, state: FSMContext) -> None:
+    """Type a custom 2-letter series (for future/extra region codes)."""
+    await cq.answer()
+    await state.set_state(Flow.combo_series)
     await show(cq.message.bot, cq.message.chat.id,
-               head + f"\n⚪ Тап → постав полювання · стор. {page + 1} 👇",
-               _combo_grid(chunk, "cmb:fr", page, has_more))
+              "⌨️ Введи <b>серію</b> — 2 літери коду регіону (напр. <b>АВ</b>):", kb_back())
+
+
+@dp.message(Flow.combo_series)
+async def do_combo_series(message: Message, state: FSMContext) -> None:
+    """Receive a custom series prefix and show its free numbers."""
+    from local.plate import normalize_plate
+
+    raw = normalize_plate(message.text or "")
+    await _safe_delete(message.bot, message.chat.id, message.message_id)
+    import re as _re
+    if not _re.fullmatch(r"[A-ZА-ЯІЇЄҐ]{2}", raw):
+        await show(message.bot, message.chat.id, "Потрібно рівно 2 літери (напр. АВ). Спробуй ще:",
+                   kb_back([("⌨️ Ще раз", "cmb:psother")]))
+        return
+    await state.set_state(Flow.combo)
+    await _render_free_for_prefix(message.bot, message.chat.id, state, raw, 0)
 
 
 @dp.callback_query(F.data.startswith("cmb:p:"))
