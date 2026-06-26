@@ -54,7 +54,7 @@ async def guard(request: Request, call_next):
                              "/collector", "/autocheck/register", "/autocheck/load-test",
                              "/autocheck/load-status", "/autocheck/load-wanted",
                              "/autocheck/wanted-status", "/autocheck/poll", "/autocheck/result",
-                             "/autocheck/agent-status"):
+                             "/autocheck/agent-status", "/autocheck/ria-status"):
         if request.headers.get("x-api-key") != config.API_KEY:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
@@ -841,6 +841,13 @@ async def autocheck_result(request: Request) -> dict:
     return {"ok": True}
 
 
+@app.get("/autocheck/ria-status")
+async def autocheck_ria_status() -> dict:
+    """AutoRia free-tier usage this month (для контролю ліміту 1000/міс)."""
+    used = int((await db.get_meta(f"ria_calls_{_ria_month()}")) or 0)
+    return {"month": _ria_month(), "used": used, "budget": _RIA_BUDGET, "left": max(0, _RIA_BUDGET - used)}
+
+
 @app.get("/autocheck/agent-status")
 async def autocheck_agent_status() -> dict:
     """Чи опитував PC-агент сервер нещодавно (для діагностики підключення). Без секрету — лише статус."""
@@ -997,21 +1004,25 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
         w = await asyncio.to_thread(_ac_wanted, plate, vin)
         if w:
             res["wanted"] = w
-    # Долити орієнтовну ринкову ціну з AutoRia (по марці/моделі/року).
+    # Долити орієнтовну ринкову ціну з AutoRia (по марці/моделі/року; VIN — для точного матчу).
     if res.get("found"):
         v = res.get("vehicle") or {}
-        mk = await _autoria_price(v.get("brand"), v.get("model"), v.get("make_year"))
+        mk = await _autoria_price(v.get("brand"), v.get("model"), v.get("make_year"), v.get("vin"))
         if mk:
             res["market"] = mk
     return res
 
 
-# ── AutoRia: орієнтовна ринкова ціна (середня по оголошеннях, з кешем у БД на місяць) ──
+# ── AutoRia: ринкова ціна + VIN-декодер. Безкоштовний ліміт — 1000 запитів/МІСЯЦЬ,
+#    тож усе агресивно кешуємо в БД і рахуємо витрачені запити, щоб не перевищити. ──
 _RIA_KEY = [None]
-_RIA_MARKS: dict = {}          # norm(brand) -> marka_id (легкові)
+_RIA_UID = [None]
+_RIA_MARKS: dict = {}          # norm(brand) -> marka_id (легкові), гарячий кеш у памʼяті
 _RIA_MODELS: dict = {}         # marka_id -> {norm(model) -> model_id}
-_RIA_TTL_HIT = 30 * 86400      # успішну ціну тримаємо місяць (як просив Артур)
-_RIA_TTL_MISS = 3 * 86400      # промах — лише 3 дні (раптом зʼявляться оголошення/покращимо матч)
+_RIA_TTL_HIT = 30 * 86400      # успішну ціну тримаємо місяць
+_RIA_TTL_MISS = 3 * 86400      # промах — 3 дні
+_RIA_TTL_DICT = 25 * 86400     # словники марок/моделей — майже статичні
+_RIA_BUDGET = 950              # запас < 1000/міс
 
 
 def _rnorm(s) -> str:
@@ -1019,70 +1030,210 @@ def _rnorm(s) -> str:
     return _re.sub(r"[\s\-]", "", (s or "").lower())
 
 
-async def _autoria_price(brand, model, year):
-    """Орієнтовна ринкова ціна авто з AutoRia, з кешем у БД (meta) на місяць.
-
-    Матч марки/моделі нормалізований (без пробілів/дефісів) + частковий збіг, щоб
-    ловити «RAV-4 HYBRID»→«RAV 4», «ACCORD HYBRID SPORT»→«Accord» тощо.
-    """
-    import asyncio
-    import json as _json
+def _ria_month() -> str:
     import time as _time
-    import urllib.request
+    return _time.strftime("%Y%m")
 
-    if not (brand or "").strip():
-        return None
-    now = _time.time()
-    ck = f"ria:{_rnorm(brand)}:{_rnorm(model)}:{year or ''}"
-    cached = await db.get_meta(ck)
-    if cached:
-        try:
-            obj = _json.loads(cached)
-            data = obj.get("data")
-            ttl = _RIA_TTL_HIT if data else _RIA_TTL_MISS
-            if now - obj.get("ts", 0) < ttl:
-                return data
-        except Exception:  # noqa: BLE001
-            pass
 
+async def _ria_quota_left() -> int:
+    """Скільки безкоштовних запитів AutoRia лишилось цього місяця."""
+    n = int((await db.get_meta(f"ria_calls_{_ria_month()}")) or 0)
+    return max(0, _RIA_BUDGET - n)
+
+
+async def _ria_bump(n: int = 1) -> None:
+    k = f"ria_calls_{_ria_month()}"
+    await db.set_meta(k, str(int((await db.get_meta(k)) or 0) + n))
+
+
+async def _ria_creds():
     if _RIA_KEY[0] is None:
         _RIA_KEY[0] = (await db.get_meta("autoria_key")) or ""
-    key = _RIA_KEY[0]
-    if not key:
-        return None
+    if _RIA_UID[0] is None:
+        _RIA_UID[0] = (await db.get_meta("autoria_user_id")) or ""
+    return _RIA_KEY[0], _RIA_UID[0]
 
-    def _get(url):
-        with urllib.request.urlopen(url, timeout=8) as r:
-            return _json.loads(r.read().decode("utf-8"))
+
+def _ria_get(url):
+    import json as _json
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=8) as r:
+        return _json.loads(r.read().decode("utf-8"))
+
+
+async def _ria_cached_json(meta_key, ttl):
+    import json as _json
+    import time as _time
+
+    raw = await db.get_meta(meta_key)
+    if raw:
+        try:
+            obj = _json.loads(raw)
+            if _time.time() - obj.get("ts", 0) < ttl:
+                return obj.get("data")
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+async def _ria_store_json(meta_key, data):
+    import json as _json
+    import time as _time
+
+    try:
+        await db.set_meta(meta_key, _json.dumps({"ts": _time.time(), "data": data}))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _ria_marks_map():
+    """norm(brand)->marka_id; памʼять → БД(25д) → API (1 запит)."""
+    import asyncio
+
+    if _RIA_MARKS:
+        return _RIA_MARKS
+    cached = await _ria_cached_json("ria_marks", _RIA_TTL_DICT)
+    if cached:
+        _RIA_MARKS.update(cached)
+        return _RIA_MARKS
+    key, _ = await _ria_creds()
+    if not key or await _ria_quota_left() <= 0:
+        return _RIA_MARKS
+    try:
+        data = await asyncio.to_thread(_ria_get, f"https://developers.ria.com/auto/categories/1/marks?api_key={key}")
+        await _ria_bump(1)
+    except Exception:  # noqa: BLE001
+        return _RIA_MARKS
+    m = {_rnorm(x["name"]): x["value"] for x in data}
+    _RIA_MARKS.update(m)
+    await _ria_store_json("ria_marks", m)
+    return _RIA_MARKS
+
+
+async def _ria_models_map(mid):
+    """norm(model)->model_id для марки; памʼять → БД(25д) → API (1 запит)."""
+    import asyncio
+
+    if mid in _RIA_MODELS:
+        return _RIA_MODELS[mid]
+    cached = await _ria_cached_json(f"ria_models_{mid}", _RIA_TTL_DICT)
+    if cached:
+        _RIA_MODELS[mid] = cached
+        return cached
+    key, _ = await _ria_creds()
+    if not key or await _ria_quota_left() <= 0:
+        return {}
+    try:
+        data = await asyncio.to_thread(
+            _ria_get, f"https://developers.ria.com/auto/categories/1/marks/{mid}/models?api_key={key}")
+        await _ria_bump(1)
+    except Exception:  # noqa: BLE001
+        return {}
+    md = {_rnorm(x["name"]): x["value"] for x in data}
+    _RIA_MODELS[mid] = md
+    await _ria_store_json(f"ria_models_{mid}", md)
+    return md
+
+
+async def _autoria_vin_decode(vin):
+    """VIN → точні id марки/моделі AutoRia (кеш у БД 30д). 1 запит при промаху кешу."""
+    import asyncio
+    import json as _json
+    import urllib.request
+
+    vin = (vin or "").strip().upper()
+    if len(vin) < 8:
+        return None
+    cached = await _ria_cached_json(f"riavin:{vin}", _RIA_TTL_HIT)
+    if cached is not None:
+        return cached or None
+    key, uid = await _ria_creds()
+    if not key or not uid or await _ria_quota_left() <= 0:
+        return None
 
     def work():
         try:
-            base = "https://developers.ria.com/auto"
-            if not _RIA_MARKS:
-                for m in _get(f"{base}/categories/1/marks?api_key={key}"):
-                    _RIA_MARKS[_rnorm(m["name"])] = m["value"]
-            mid = _RIA_MARKS.get(_rnorm(brand))
-            if not mid:
+            url = f"https://developers.ria.com/auto/params/by/vin-code/?user_id={uid}&api_key={key}"
+            body = _json.dumps({"langId": 4, "period": 365, "params": {"omniId": vin}}).encode("utf-8")
+            req = urllib.request.Request(url, data=body, headers={"Content-type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                d = _json.loads(r.read().decode("utf-8"))
+            chips = {c.get("entity"): c for c in (d.get("chipsData", {}).get("chips") or [])}
+            brand = chips.get("brandId", {}).get("value")
+            modelv = chips.get("modelId", {}).get("value")
+            yr = chips.get("year", {}).get("value")
+            yv = yr.get("gte") if isinstance(yr, dict) else yr
+            if not (brand and modelv):
                 return None
-            if mid not in _RIA_MODELS:
-                md = {}
-                for m in _get(f"{base}/categories/1/marks/{mid}/models?api_key={key}"):
-                    md[_rnorm(m["name"])] = m["value"]
-                _RIA_MODELS[mid] = md
-            mm = _RIA_MODELS[mid]
-            t = _rnorm(model)
-            modid = mm.get(t)
-            if not modid and t:  # частковий збіг в обидва боки
-                for nm, mi in mm.items():
-                    if nm and (t.startswith(nm) or nm.startswith(t)):
-                        modid = mi
-                        break
-            if not modid:
+            return {"marka_id": brand, "model_id": modelv, "year": yv}
+        except Exception:  # noqa: BLE001
+            return None
+
+    data = await asyncio.to_thread(work)
+    await _ria_bump(1)
+    await _ria_store_json(f"riavin:{vin}", data or {})
+    return data
+
+
+async def _autoria_price(brand, model, year, vin=None):
+    """Ринкова ціна авто з AutoRia. Кеш у БД на місяць. Економний під ліміт 1000/міс:
+    спершу матч по назві; VIN-декодер — лише коли назва не зматчилась."""
+    import asyncio
+
+    if not (brand or "").strip():
+        return None
+    ck = f"ria:{_rnorm(brand)}:{_rnorm(model)}:{year or ''}"
+    # Кеш: успіх тримаємо 30д, промах — лише 3д (потім дозволяємо ретрай).
+    import json as _json
+    import time as _time
+
+    raw = await db.get_meta(ck)
+    if raw:
+        try:
+            obj = _json.loads(raw)
+            data = obj.get("data")
+            age = _time.time() - obj.get("ts", 0)
+            if data and age < _RIA_TTL_HIT:
+                return data
+            if not data and age < _RIA_TTL_MISS:
                 return None
-            url = f"{base}/average_price?api_key={key}&main_category=1&marka_id={mid}&model_id={modid}"
+        except Exception:  # noqa: BLE001
+            pass
+
+    key, _ = await _ria_creds()
+    if not key or await _ria_quota_left() <= 0:
+        return None
+
+    marks = await _ria_marks_map()
+    mid = marks.get(_rnorm(brand))
+    modid = None
+    if mid:
+        mm = await _ria_models_map(mid)
+        t = _rnorm(model)
+        modid = mm.get(t)
+        if not modid and t:
+            for nm, mi in mm.items():
+                if nm and (t.startswith(nm) or nm.startswith(t)):
+                    modid = mi
+                    break
+    if not modid and vin:  # точний матч через VIN-декодер (економно — лише при промаху)
+        dec = await _autoria_vin_decode(vin)
+        if dec:
+            mid = dec.get("marka_id") or mid
+            modid = dec.get("model_id")
+            year = year or dec.get("year")
+    if not (mid and modid) or await _ria_quota_left() <= 0:
+        await _ria_store_json(ck, {})  # кешуємо промах (на _RIA_TTL_MISS)
+        return None
+
+    def work():
+        try:
+            url = (f"https://developers.ria.com/auto/average_price?api_key={key}"
+                   f"&main_category=1&marka_id={mid}&model_id={modid}")
             if year:
                 url += f"&yers={year}"
-            d = _get(url)
+            d = _ria_get(url)
             if not d.get("total"):
                 return None
             pct = d.get("percentiles") or {}
@@ -1100,10 +1251,8 @@ async def _autoria_price(brand, model, year):
             return None
 
     data = await asyncio.to_thread(work)
-    try:
-        await db.set_meta(ck, _json.dumps({"ts": now, "data": data}))
-    except Exception:  # noqa: BLE001
-        pass
+    await _ria_bump(1)
+    await _ria_store_json(ck, data or {})
     return data
 
 
