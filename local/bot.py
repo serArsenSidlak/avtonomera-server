@@ -413,6 +413,51 @@ async def push_refresh_all(
     return sent
 
 
+async def push_menu_wipe_all(bot: Bot, banner: str = "") -> int:
+    """Hourly re-engagement: send a FRESH main-menu message to every user and WIPE the previous
+    conversation below it, leaving exactly one clean screen.
+
+    A brand-new message (an edit would not) bumps the chat to the top of Telegram's list — that
+    keeps the bot visible — while ``_wipe_chat`` removes the old menu/notifications so the chat
+    stays tidy. Requested by the owner: stay on top, clean screen, 07:00–21:00.
+    """
+    sent = 0
+    for chat_id in await db.all_user_ids():
+        _screens.pop(chat_id, None)  # force a NEW message (bumps the chat); edit would not
+        try:
+            await render_main(bot, chat_id, banner=banner)
+            new_id = _screens.get(chat_id, 0)
+            if new_id:
+                await _wipe_chat(bot, chat_id, new_id, keep={new_id})  # clear old переписку
+            sent += 1
+        except Exception as exc:  # user blocked the bot, left the group, etc.
+            print(f"[hourly] {chat_id}: {exc!r}")
+        await asyncio.sleep(0.05)  # stay under Telegram's broadcast rate limit
+    return sent
+
+
+async def _hourly_menu_loop(bot: Bot) -> None:
+    """Once at the top of each hour from MENU_HOURS_START..MENU_HOURS_END (Kyiv), broadcast a
+    fresh main menu and wipe the old conversation. Polls each minute and fires once per hour.
+    """
+    from zoneinfo import ZoneInfo
+    import datetime as dt
+    kyiv = ZoneInfo("Europe/Kyiv")
+    last_slot = None  # (date, hour) already handled — avoids re-firing within the same hour
+    while True:
+        try:
+            now = dt.datetime.now(kyiv)
+            if config.MENU_HOURS_START <= now.hour <= config.MENU_HOURS_END and now.minute < 5:
+                slot = (now.date(), now.hour)
+                if slot != last_slot:
+                    last_slot = slot
+                    n = await push_menu_wipe_all(bot)
+                    print(f"[hourly] {now:%Y-%m-%d %H:%M} menu → {n} chats")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[hourly] loop: {exc!r}")
+        await asyncio.sleep(60)
+
+
 @dp.message(CommandStart())
 async def on_start(message: Message, state: FSMContext, command: CommandObject) -> None:
     """Greet, register, apply referral deep-link, reset to a fresh single screen."""
@@ -3485,7 +3530,9 @@ async def main() -> None:
         )
     except Exception:
         pass
-    if config.REFRESH_HOURS > 0:
+    if config.MENU_BROADCAST:
+        asyncio.create_task(_hourly_menu_loop(bot))  # hourly 07–21 menu + wipe (owner request)
+    elif config.REFRESH_HOURS > 0:
         asyncio.create_task(_periodic_refresh(bot))
     asyncio.create_task(_auto_commit_loop(bot))
     print(f"Bot @{BOT_USERNAME} started (Моніторинг Автономерів, long polling). Ctrl+C to stop.")
