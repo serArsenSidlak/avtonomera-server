@@ -1204,8 +1204,9 @@ async def do_word(message: Message, state: FSMContext) -> None:
 async def cb_m_search(cq: CallbackQuery, state: FSMContext) -> None:
     """Section: search."""
     await state.clear()
-    await show(cq.message.bot, cq.message.chat.id, "🔍 <b>Пошук номера</b>\nОбери спосіб:",
-              _kb_submenu([("🔍 Пошук номера", "search"), ("🔢 Підбір за комбінацією", "combo"),
+    await show(cq.message.bot, cq.message.chat.id,
+              "🔍 <b>Пошук номера</b>\n━━━━━━━━━━━━\n<i>Знайди вільний номер для реєстрації</i>",
+              _kb_submenu([("🔍 За цифрами / маскою", "search"), ("🔢 Підбір за комбінацією", "combo"),
                            ("🔤 Слово на номері", "wordsearch"),
                            ("✨ Добірки", "cols"), ("🔥 Популярні", "popular")]))
 
@@ -1214,7 +1215,8 @@ async def cb_m_search(cq: CallbackQuery, state: FSMContext) -> None:
 async def cb_m_monitor(cq: CallbackQuery, state: FSMContext) -> None:
     """Section: monitoring."""
     await state.clear()
-    await show(cq.message.bot, cq.message.chat.id, "🔔 <b>Моніторинг</b>",
+    await show(cq.message.bot, cq.message.chat.id,
+              "🔔 <b>Моніторинг</b>\n━━━━━━━━━━━━\n<i>Стеж за номером — сповіщу, щойно зʼявиться</i>",
               _kb_submenu([("🔔 Стежити за номером", "newhunt"), ("🎯 Мої моніторинги", "myhunts"),
                            ("📰 Нові / зниклі", "feed"), ("⭐ Обрані", "favs")]))
 
@@ -1223,7 +1225,8 @@ async def cb_m_monitor(cq: CallbackQuery, state: FSMContext) -> None:
 async def cb_m_more(cq: CallbackQuery, state: FSMContext) -> None:
     """Section: account / extras."""
     await state.clear()
-    await show(cq.message.bot, cq.message.chat.id, "⚙️ <b>Ще</b>",
+    await show(cq.message.bot, cq.message.chat.id,
+              "⚙️ <b>Ще</b>\n━━━━━━━━━━━━\n<i>Акаунт, статистика, довідка</i>",
               _kb_submenu([("💎 Тариф", "plan"), ("👥 Друзі", "ref"),
                            ("📊 Статистика", "stats"), ("ℹ️ Довідка", "help")]))
 
