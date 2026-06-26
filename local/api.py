@@ -997,7 +997,76 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
         w = await asyncio.to_thread(_ac_wanted, plate, vin)
         if w:
             res["wanted"] = w
+    # Долити орієнтовну ринкову ціну з AutoRia (по марці/моделі/року).
+    if res.get("found"):
+        v = res.get("vehicle") or {}
+        mk = await _autoria_price(v.get("brand"), v.get("model"), v.get("make_year"))
+        if mk:
+            res["market"] = mk
     return res
+
+
+# ── AutoRia: орієнтовна ринкова ціна (середня по оголошеннях) ──
+_RIA_KEY = [None]
+_RIA_MARKS: dict = {}          # lower(brand) -> marka_id (легкові)
+_RIA_MODELS: dict = {}         # marka_id -> {lower(model) -> model_id}
+
+
+async def _autoria_price(brand, model, year):
+    """Орієнтовна ринкова ціна авто з AutoRia (None, якщо ключа/збігу немає)."""
+    import asyncio
+    import json as _json
+    import urllib.request
+    from urllib.parse import quote
+
+    if _RIA_KEY[0] is None:
+        _RIA_KEY[0] = (await db.get_meta("autoria_key")) or ""
+    key = _RIA_KEY[0]
+    if not key or not (brand or "").strip():
+        return None
+
+    def _get(url):
+        with urllib.request.urlopen(url, timeout=8) as r:
+            return _json.loads(r.read().decode("utf-8"))
+
+    def work():
+        try:
+            base = "https://developers.ria.com/auto"
+            if not _RIA_MARKS:
+                for m in _get(f"{base}/categories/1/marks?api_key={key}"):
+                    _RIA_MARKS[(m["name"] or "").lower()] = m["value"]
+            mid = _RIA_MARKS.get(brand.strip().lower())
+            if not mid:
+                return None
+            if mid not in _RIA_MODELS:
+                md = {}
+                for m in _get(f"{base}/categories/1/marks/{mid}/models?api_key={key}"):
+                    md[(m["name"] or "").lower()] = m["value"]
+                _RIA_MODELS[mid] = md
+            modid = _RIA_MODELS[mid].get((model or "").strip().lower())
+            if not modid:
+                return None
+            url = f"{base}/average_price?api_key={key}&main_category=1&marka_id={mid}&model_id={modid}"
+            if year:
+                url += f"&yers={quote(str(year))}"
+            d = _get(url)
+            if not d.get("total"):
+                return None
+            pct = d.get("percentiles") or {}
+
+            def num(x):
+                try:
+                    return round(float(x))
+                except (TypeError, ValueError):
+                    return None
+
+            return {"mean": num(d.get("arithmeticMean")), "median": num(pct.get("50.0")),
+                    "p25": num(pct.get("25.0")), "p75": num(pct.get("75.0")),
+                    "total": d.get("total"), "currency": "USD"}
+        except Exception:  # noqa: BLE001
+            return None
+
+    return await asyncio.to_thread(work)
 
 
 @app.post("/stage")

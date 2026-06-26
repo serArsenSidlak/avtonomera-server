@@ -541,6 +541,9 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
         lines.append(f"🚗 <b>{title}</b>{yr}")
         if v.get("plate"):
             lines.append(f"🔢 {v['plate']}")
+        mk = d.get("market")
+        if mk and (mk.get("median") or mk.get("mean")):
+            lines.append(f"💵 ~${(mk.get('median') or mk.get('mean')):,} (AutoRia)".replace(",", " "))
     lines.append("\nОбери, що показати 👇")
     return "\n".join(lines)
 
@@ -587,7 +590,16 @@ def _fmt_ac_reg(d: dict) -> str:
         if last.get("dep"):
             row += f" ({last['dep']})"
         lines.append(row)
-    lines.append("\n<i>Джерело: реєстр МВС (data.gov.ua), без персональних даних.</i>")
+    mk = d.get("market")
+    if mk and (mk.get("median") or mk.get("mean")):
+        med = mk.get("median") or mk.get("mean")
+        line = f"\n💵 Ринкова ціна (AutoRia): <b>~${med:,}</b>".replace(",", " ")
+        if mk.get("p25") and mk.get("p75"):
+            line += f"\n   діапазон ${mk['p25']:,}–${mk['p75']:,}".replace(",", " ")
+        if mk.get("total"):
+            line += f" · {mk['total']} оголошень"
+        lines.append(line)
+    lines.append("\n<i>Джерела: реєстр МВС (data.gov.ua) + ціни AutoRia.</i>")
     return "\n".join(lines)
 
 
