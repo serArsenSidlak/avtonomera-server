@@ -1006,23 +1006,49 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
     return res
 
 
-# ── AutoRia: орієнтовна ринкова ціна (середня по оголошеннях) ──
+# ── AutoRia: орієнтовна ринкова ціна (середня по оголошеннях, з кешем у БД на місяць) ──
 _RIA_KEY = [None]
-_RIA_MARKS: dict = {}          # lower(brand) -> marka_id (легкові)
-_RIA_MODELS: dict = {}         # marka_id -> {lower(model) -> model_id}
+_RIA_MARKS: dict = {}          # norm(brand) -> marka_id (легкові)
+_RIA_MODELS: dict = {}         # marka_id -> {norm(model) -> model_id}
+_RIA_TTL_HIT = 30 * 86400      # успішну ціну тримаємо місяць (як просив Артур)
+_RIA_TTL_MISS = 3 * 86400      # промах — лише 3 дні (раптом зʼявляться оголошення/покращимо матч)
+
+
+def _rnorm(s) -> str:
+    import re as _re
+    return _re.sub(r"[\s\-]", "", (s or "").lower())
 
 
 async def _autoria_price(brand, model, year):
-    """Орієнтовна ринкова ціна авто з AutoRia (None, якщо ключа/збігу немає)."""
+    """Орієнтовна ринкова ціна авто з AutoRia, з кешем у БД (meta) на місяць.
+
+    Матч марки/моделі нормалізований (без пробілів/дефісів) + частковий збіг, щоб
+    ловити «RAV-4 HYBRID»→«RAV 4», «ACCORD HYBRID SPORT»→«Accord» тощо.
+    """
     import asyncio
     import json as _json
+    import time as _time
     import urllib.request
-    from urllib.parse import quote
+
+    if not (brand or "").strip():
+        return None
+    now = _time.time()
+    ck = f"ria:{_rnorm(brand)}:{_rnorm(model)}:{year or ''}"
+    cached = await db.get_meta(ck)
+    if cached:
+        try:
+            obj = _json.loads(cached)
+            data = obj.get("data")
+            ttl = _RIA_TTL_HIT if data else _RIA_TTL_MISS
+            if now - obj.get("ts", 0) < ttl:
+                return data
+        except Exception:  # noqa: BLE001
+            pass
 
     if _RIA_KEY[0] is None:
         _RIA_KEY[0] = (await db.get_meta("autoria_key")) or ""
     key = _RIA_KEY[0]
-    if not key or not (brand or "").strip():
+    if not key:
         return None
 
     def _get(url):
@@ -1034,21 +1060,28 @@ async def _autoria_price(brand, model, year):
             base = "https://developers.ria.com/auto"
             if not _RIA_MARKS:
                 for m in _get(f"{base}/categories/1/marks?api_key={key}"):
-                    _RIA_MARKS[(m["name"] or "").lower()] = m["value"]
-            mid = _RIA_MARKS.get(brand.strip().lower())
+                    _RIA_MARKS[_rnorm(m["name"])] = m["value"]
+            mid = _RIA_MARKS.get(_rnorm(brand))
             if not mid:
                 return None
             if mid not in _RIA_MODELS:
                 md = {}
                 for m in _get(f"{base}/categories/1/marks/{mid}/models?api_key={key}"):
-                    md[(m["name"] or "").lower()] = m["value"]
+                    md[_rnorm(m["name"])] = m["value"]
                 _RIA_MODELS[mid] = md
-            modid = _RIA_MODELS[mid].get((model or "").strip().lower())
+            mm = _RIA_MODELS[mid]
+            t = _rnorm(model)
+            modid = mm.get(t)
+            if not modid and t:  # частковий збіг в обидва боки
+                for nm, mi in mm.items():
+                    if nm and (t.startswith(nm) or nm.startswith(t)):
+                        modid = mi
+                        break
             if not modid:
                 return None
             url = f"{base}/average_price?api_key={key}&main_category=1&marka_id={mid}&model_id={modid}"
             if year:
-                url += f"&yers={quote(str(year))}"
+                url += f"&yers={year}"
             d = _get(url)
             if not d.get("total"):
                 return None
@@ -1066,7 +1099,12 @@ async def _autoria_price(brand, model, year):
         except Exception:  # noqa: BLE001
             return None
 
-    return await asyncio.to_thread(work)
+    data = await asyncio.to_thread(work)
+    try:
+        await db.set_meta(ck, _json.dumps({"ts": now, "data": data}))
+    except Exception:  # noqa: BLE001
+        pass
+    return data
 
 
 @app.post("/stage")
