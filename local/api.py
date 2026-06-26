@@ -23,7 +23,7 @@ app.add_middleware(
 PAGE = 20
 
 # Public endpoints that never require the app key.
-_OPEN_PATHS = {"/health", "/open", "/pitch"}
+_OPEN_PATHS = {"/health", "/open", "/pitch", "/features"}
 # Simple in-memory per-IP rate limiter (one uvicorn worker). minute-bucket -> {ip: count}.
 _rate_bucket: dict = {}
 _rate_minute: list = [0]
@@ -229,6 +229,148 @@ footer{color:var(--sub);font-size:13px;text-align:center;padding:30px 0 50px}
 <footer>База Автономерів · зроблено в Україні з 🤍💙💛 · усі дані — відкриті (data.gov.ua)</footer>
 </body></html>'''
 
+_FEATURES_HTML = '''<!doctype html><html lang="uk"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>База Автономерів — функціонал і головне меню</title>
+<meta property="og:title" content="База Автономерів — функціонал">
+<meta property="og:description" content="Детальний опис функцій і головного меню застосунку.">
+<meta name="theme-color" content="#0b0e14">
+<style>
+:root{--bg:#0b0e14;--card:#161b24;--line:#222a36;--text:#f1f4f9;--sub:#8b95a7;--blue:#3b82f6;--green:#22c55e}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}
+.wrap{max-width:820px;margin:0 auto;padding:0 20px}
+.top{padding:64px 0 36px;text-align:center;background:radial-gradient(900px 380px at 50% -10%,rgba(59,130,246,.22),transparent 60%)}
+.top h1{font-size:clamp(32px,7vw,52px);font-weight:900;letter-spacing:-1px}
+.top p{margin-top:14px;color:#cdd6e6;font-size:clamp(16px,3.2vw,19px)}
+.toc{display:flex;flex-wrap:wrap;gap:8px;justify-content:center;margin-top:26px}
+.toc a{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:7px 14px;font-size:13px;color:#cdd6e6;text-decoration:none}
+section{padding:42px 0;border-top:1px solid var(--line)}
+.eyebrow{color:var(--blue);font-weight:800;letter-spacing:2px;text-transform:uppercase;font-size:12px;margin-bottom:12px}
+h2{font-size:clamp(24px,5vw,34px);font-weight:900;letter-spacing:-.5px;margin-bottom:14px}
+h3{font-size:20px;font-weight:800;margin:18px 0 6px}
+p{color:#d4dbe8}.muted{color:var(--sub);font-size:14px}
+.menu{display:grid;grid-template-columns:1fr;gap:12px;margin-top:18px}
+.mi{display:flex;gap:14px;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
+.mi .dot{width:46px;height:46px;border-radius:13px;flex:none;display:flex;align-items:center;justify-content:center;font-size:22px;color:#fff}
+.mi h4{font-size:16px;font-weight:800}.mi p{font-size:13.5px;margin-top:3px;color:#cdd6e6}
+.b1{background:linear-gradient(135deg,#3b82f6,#1d4ed8)}.b2{background:linear-gradient(135deg,#8b5cf6,#6d28d9)}
+.b3{background:linear-gradient(135deg,#14b8a6,#0f766e)}.b4{background:linear-gradient(135deg,#f59e0b,#b45309)}
+.b5{background:linear-gradient(135deg,#0ea5e9,#0369a1)}.b6{background:linear-gradient(135deg,#ec4899,#9d174d)}
+.steps{list-style:none;margin:12px 0 0;padding:0}
+.steps li{position:relative;padding:8px 0 8px 30px;color:#d4dbe8;font-size:15px;border-bottom:1px solid var(--line)}
+.steps li:before{content:"";position:absolute;left:6px;top:15px;width:8px;height:8px;border-radius:50%;background:var(--blue)}
+.badge{display:inline-block;font-size:12px;font-weight:700;padding:3px 9px;border-radius:8px;margin:2px 4px 2px 0}
+.bg{background:rgba(34,197,94,.16);color:#86efac}.br{background:rgba(239,68,68,.16);color:#fca5a5}.bw{background:rgba(148,163,184,.16);color:#cbd5e1}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px;margin-top:14px}
+footer{color:var(--sub);font-size:13px;text-align:center;padding:36px 0 50px;border-top:1px solid var(--line)}
+a.lnk{color:var(--blue);text-decoration:none}
+</style></head><body>
+
+<div class="top"><div class="wrap">
+  <h1>Функціонал проєкту</h1>
+  <p>Детальний опис можливостей і головного меню «Бази Автономерів».</p>
+  <div class="toc">
+    <a href="#menu">Головне меню</a><a href="#check">Перевірка авто</a><a href="#combo">Підбір комбінації</a>
+    <a href="#catalog">Каталог</a><a href="#monitor">Моніторинг</a><a href="#data">Дані</a>
+  </div>
+</div></div>
+
+<div class="wrap">
+
+<section id="menu">
+  <div class="eyebrow">Головне меню</div>
+  <h2>Дашборд «База Автономерів»</h2>
+  <p>Головний екран — це вітрина всієї бази. Зверху — бренд і підзаголовок «усі номери України, зайняті й вільні». Далі три показники бази, шість функціональних плиток (кожна з власним градієнтом), а нижче — добірки й популярні комбінації.</p>
+
+  <h3>Показники бази</h3>
+  <p class="muted">📦 20M+ — записів у реєстрі МВС · 📋 каталог — відстежувані номери ГСЦ · 🟢 у продажу — доступні зараз для реєстрації.</p>
+
+  <h3>Шість плиток (пункти меню)</h3>
+  <div class="menu">
+    <div class="mi"><div class="dot b1">🚗</div><div><h4>Перевірка авто</h4><p>Пробити номер або VIN: марка, рік, паливо, історія реєстрацій, ринкова ціна, статус розшуку та доступність для реєстрації.</p></div></div>
+    <div class="mi"><div class="dot b2">🔢</div><div><h4>Підбір за комбінацією</h4><p>Ввести цифри й побачити три групи: доступні в продажу, зайняті на авто, вільні для полювання.</p></div></div>
+    <div class="mi"><div class="dot b3">🔍</div><div><h4>Каталог номерів</h4><p>Пошук по всій базі за серією, регіоном, типом ТЗ, ціною; маски та красиві комбінації.</p></div></div>
+    <div class="mi"><div class="dot b4">🔔</div><div><h4>Моніторинг</h4><p>Поставити номер/серію на стеження — сповіщення тієї ж миті, щойно зʼявиться у продажу.</p></div></div>
+    <div class="mi"><div class="dot b5">📰</div><div><h4>Нові / зниклі</h4><p>Стрічка змін: що зʼявилось і що зникло з продажу за добу / тиждень / місяць.</p></div></div>
+    <div class="mi"><div class="dot b6">⭐</div><div><h4>Обрані</h4><p>Збережені номери — швидкий доступ до тих, що сподобались.</p></div></div>
+  </div>
+
+  <h3>Нижче на головній</h3>
+  <p class="muted">✨ Добірки красивих (однакові цифри, дзеркальні, пари, круглі, низькі) · 🔥 Популярні комбінації (за кількістю обраних/полювань).</p>
+
+  <h3>Нижня навігація (таби)</h3>
+  <p class="muted">🏠 Головна · 🔢 Комбінація · 🚗 Перевірка · ⭐ Обране · 👤 Профіль (синхронізація з Telegram).</p>
+</section>
+
+<section id="check">
+  <div class="eyebrow">Функція</div>
+  <h2>🚗 Перевірка авто</h2>
+  <p>Вводиш номер або VIN — і одразу бачиш повну, але зрозумілу картку. Без зайвого — деталі ховаються за кнопками.</p>
+  <div class="card">
+    <p><b>Статуси (завжди явно):</b></p>
+    <p><span class="badge bg">✅ зареєстрований</span><span class="badge br">⚠️ знятий з обліку</span><span class="badge bw">⚪ ніколи не реєструвався</span></p>
+    <p style="margin-top:8px"><b>+ доступність:</b> «🏷 Доступний для реєстрації зараз: ТАК / НІ» — з ціною та датою підтвердження.</p>
+  </div>
+  <ul class="steps">
+    <li><b>📍 Регіон</b> — визначається за літерами номера (Додаток 4 наказу МВС).</li>
+    <li><b>📋 Держреєстрація</b> — марка, модель, рік, обʼєм, паливо, колір, VIN, остання операція.</li>
+    <li><b>💵 Ринкова ціна</b> — середня з AutoRia (медіана + діапазон + кількість оголошень).</li>
+    <li><b>🔢 Історія номера</b> — усі авто, що були на цьому номері.</li>
+    <li><b>🚙 Історія авто</b> — уся історія по VIN (усі номери цього авто).</li>
+    <li><b>🚨 Розшук</b> — звірка з базою авто в розшуку МВС.</li>
+    <li><b>🔗 Офіційні джерела</b> — швидкі переходи: AutoRia, ОСАГО (МТСБУ), обтяження (Мінюст).</li>
+  </ul>
+</section>
+
+<section id="combo">
+  <div class="eyebrow">Функція</div>
+  <h2>🔢 Підбір за комбінацією</h2>
+  <p>Серце ідеї — обʼєднання двох баз. Вводиш 4 цифри (напр. 0100) і отримуєш повну картину по цій комбінації.</p>
+  <ul class="steps">
+    <li><span class="badge bg">🟢 В продажу</span> — номери з цією комбінацією, доступні зараз у ГСЦ.</li>
+    <li><span class="badge br">🔴 На авто</span> — уже зареєстровані; тап → дані авто.</li>
+    <li><span class="badge bw">⚪ Вільні</span> — валідні за постановою, але ще не зустрічались → постав полювання.</li>
+    <li><b>Фільтри</b> Тип ТЗ + Регіон діють на всі три групи разом.</li>
+    <li><b>Вибір серії</b> — спершу обираєш літеросполуку регіону (усі коди за Додатком 4, включно з резервними), потім бачиш повні номери цієї серії.</li>
+  </ul>
+</section>
+
+<section id="catalog">
+  <div class="eyebrow">Функція</div>
+  <h2>🔍 Каталог номерів</h2>
+  <p>Пошук по всій базі доступних номерів.</p>
+  <ul class="steps">
+    <li>За <b>цифрами або маскою</b> (1234, 1**4, 7777).</li>
+    <li>За <b>серією / літерами</b>, <b>регіоном</b>, <b>типом ТЗ</b>, <b>ціною</b>.</li>
+    <li><b>Слово на номері</b> — перші + останні літери разом (напр. СЕ****КС).</li>
+    <li><b>Добірки</b> красивих і <b>популярні</b> комбінації.</li>
+    <li>Тап по номеру → картка з усіма деталями та статусом.</li>
+  </ul>
+</section>
+
+<section id="monitor">
+  <div class="eyebrow">Функція</div>
+  <h2>🔔 Моніторинг · 📰 Стрічка · ⭐ Обрані</h2>
+  <ul class="steps">
+    <li><b>Моніторинг</b> — постав номер/серію/комбінацію на стеження; миттєве сповіщення про появу. Працює і без Telegram.</li>
+    <li><b>Нові / зниклі</b> — що зʼявилось і зникло з продажу за добу/тиждень/місяць.</li>
+    <li><b>Обрані</b> — збережені номери; синхронізуються між ботом і додатком.</li>
+  </ul>
+</section>
+
+<section id="data">
+  <div class="eyebrow">Основа</div>
+  <h2>Дані та платформи</h2>
+  <p><b>Джерела (тільки відкриті, data.gov.ua):</b> реєстр транспортних засобів МВС (20+ млн записів), база авто в розшуку, відкриті номери ГСЦ. Без зливів, без персональних даних.</p>
+  <p style="margin-top:10px"><b>Платформи:</b> Telegram-бот (працює) · iOS-додаток (Expo, у розробці) · веб (далі).</p>
+  <p class="muted" style="margin-top:14px">Більше про ідею та душу проєкту — на сторінці <a class="lnk" href="/pitch">/pitch</a>.</p>
+</section>
+
+</div>
+<footer>База Автономерів · функціонал станом на цю версію · зроблено в Україні 🇺🇦</footer>
+</body></html>'''
+
 
 @app.get("/open", response_class=HTMLResponse)
 async def open_app() -> str:
@@ -257,6 +399,12 @@ p{{color:#9aa4b2}}</style></head><body>
 async def pitch() -> str:
     """Публічна сторінка-презентація проєкту (для дизайнерів, критиків, інвесторів)."""
     return _PITCH_HTML
+
+
+@app.get("/features", response_class=HTMLResponse)
+async def features() -> str:
+    """Детальна презентація функціоналу + опис головного меню."""
+    return _FEATURES_HTML
 
 
 @app.get("/stats")
