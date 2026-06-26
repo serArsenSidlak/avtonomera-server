@@ -320,18 +320,17 @@ def _fmt_row(r: dict, show_addr: bool = False) -> str:
 # ── main menu / static screens ────────────────────
 async def render_main(bot: Bot, chat_id: int, banner: str = "") -> None:
     """Render the main menu with a live total. Optional ``banner`` line shown on top."""
-    s = await db.get_stats()
-    total = s.get("total") or 0
     user = await db.get_user(chat_id)
     plan = "💎 PRO" if db.is_pro(user) else "🆓 FREE"
     text = (
         (banner + "\n\n" if banner else "")
         + "🇺🇦 <b>Моніторинг Автономерів</b>\n"
-        "<i>Постав номер на стеження — і дізнайся першим, щойно він зʼявиться.</i>\n\n"
-        f"📦 У базі: <b>{total:,}</b> номерів".replace(",", " ") + "\n"
-        f"💎 Тариф: <b>{plan}</b>\n"
-        "🟢 Працює 24/7\n\n"
-        "👇 Створи моніторинг або скористайся пошуком"
+        "━━━━━━━━━━━━━━\n"
+        "🔍 Підбір вільних номерів для реєстрації\n"
+        "🚗 Перевірка авто за номером або VIN\n"
+        "🔔 Моніторинг — сповіщу, щойно зʼявиться\n\n"
+        f"💎 {plan}   ·   🟢 24/7\n\n"
+        "👇 Обери дію"
     )
     markup = kb_main()
     if await db.is_admin(chat_id):
