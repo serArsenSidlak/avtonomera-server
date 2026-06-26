@@ -127,7 +127,12 @@ EXPO_URL = "exp://bah32_a-anonymous-8081.exp.direct"
 
 @app.get("/open", response_class=HTMLResponse)
 async def open_app() -> str:
-    """A tappable page that redirects into Expo Go (open in the phone's browser)."""
+    """A tappable page that redirects into Expo Go (open in the phone's browser).
+
+    The Expo tunnel URL rotates on every dev-server restart (anonymous ngrok), so we
+    read it from DB meta `expo_url` (updatable instantly from the Mac, no code deploy).
+    """
+    expo_url = (await db.get_meta("expo_url")) or EXPO_URL
     return f"""<!doctype html><html lang="uk"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Моніторинг Автономерів</title>
@@ -137,9 +142,9 @@ text-decoration:none;padding:16px 28px;border-radius:14px;font-size:18px;font-we
 p{{color:#9aa4b2}}</style></head><body>
 <h2>🇺🇦 Моніторинг Автономерів</h2>
 <p>Натисни кнопку, щоб відкрити застосунок у Expo Go:</p>
-<a class="btn" href="{EXPO_URL}">▶️ Відкрити в Expo Go</a>
+<a class="btn" href="{expo_url}">▶️ Відкрити в Expo Go</a>
 <p style="margin-top:30px;font-size:13px">Якщо не відкрилось — встанови «Expo Go» з App Store і натисни ще раз.</p>
-<script>setTimeout(function(){{window.location.href="{EXPO_URL}";}}, 600);</script>
+<script>setTimeout(function(){{window.location.href="{expo_url}";}}, 600);</script>
 </body></html>"""
 
 
