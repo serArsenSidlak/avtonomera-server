@@ -173,6 +173,11 @@ def _proxy_arg(proxy):
     return {"server": f"{scheme}://{p}"}
 
 
+# Seconds to pause between each synthetic mouse move. Bigger = more patient with Akamai on
+# slow/flaky connections (override with AGENT_HUMAN_STEP). Default 1.6s.
+_HUMAN_STEP = float(os.environ.get("AGENT_HUMAN_STEP", "1.6"))
+
+
 async def _human(page, secs):
     """Synthetic mouse moves + occasional wheel scroll to satisfy Akamai's sec-cpt challenge.
 
@@ -180,13 +185,13 @@ async def _human(page, secs):
     behavioural challenge pass — same approach the Mac scraper uses successfully.
     """
     for i in range(secs):
-        await page.mouse.move(random.randint(50, 1200), random.randint(50, 650), steps=random.randint(3, 9))
+        await page.mouse.move(random.randint(50, 1200), random.randint(50, 650), steps=random.randint(5, 14))
         if i % 2 == 0:
             try:
-                await page.mouse.wheel(0, random.randint(-150, 150))
+                await page.mouse.wheel(0, random.randint(-200, 200))
             except Exception:  # noqa: BLE001
                 pass
-        await asyncio.sleep(1)
+        await asyncio.sleep(_HUMAN_STEP)
 
 
 async def _options(page, css_id):
@@ -212,11 +217,11 @@ async def _scrape(region_names, proxy):
         page = await ctx.new_page()
         try:
             await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
-            for _ in range(8):
-                await _human(page, 4)
+            for _ in range(10):
+                await _human(page, 6)
                 if await page.evaluate("()=>document.querySelectorAll('select').length") > 0:
                     break
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
             all_regions = await _options(page, "#region")
             with _lock:
                 STATE["values"] = {n: v for v, n in all_regions}
@@ -246,14 +251,14 @@ async def _scrape(region_names, proxy):
                     except Exception:
                         # Akamai re-challenged on reload → re-pass it with mouse movement,
                         # otherwise the region falsely fails (this is the main winagent bug).
-                        for _ in range(6):
-                            await _human(page, 4)
+                        for _ in range(8):
+                            await _human(page, 6)
                             if await page.evaluate("()=>document.querySelectorAll('select').length") > 0:
                                 break
-                            await asyncio.sleep(3)
-                        await page.wait_for_selector("#region", timeout=15000)
+                            await asyncio.sleep(4)
+                        await page.wait_for_selector("#region", timeout=20000)
                     await page.select_option("#region", rv)
-                    await asyncio.sleep(random.uniform(0.4, 1.0))
+                    await asyncio.sleep(random.uniform(0.9, 2.0))
                     for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
                         loc = page.locator(sel).first
                         if await loc.count() > 0:
@@ -265,7 +270,7 @@ async def _scrape(region_names, proxy):
                     # One request: whole region, all types. Type is recovered per-plate from series.
                     await page.select_option("#tsc", "Весь регіон")
                     await page.select_option("#type_venichle", "all")
-                    await asyncio.sleep(random.uniform(0.4, 1.0))
+                    await asyncio.sleep(random.uniform(0.9, 2.0))
                     async with page.expect_response(
                         lambda r: r.request.method == "POST" and "check-leisure-license-plates" in r.url,
                         timeout=45000) as ri:
