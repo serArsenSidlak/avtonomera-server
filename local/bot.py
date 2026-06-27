@@ -510,7 +510,21 @@ async def on_start(message: Message, state: FSMContext, command: CommandObject) 
                 except Exception:
                     pass
     await state.clear()
-    _screens.pop(message.chat.id, None)
+    # Force a BRAND-NEW menu message. Just forgetting the in-memory id is not enough: show()
+    # would still read scr_<chat> from the DB and *edit* the old message. If the user cleared the
+    # chat, that old message is invisible to them but still editable server-side — the edit
+    # "succeeds", nothing new is sent, and the user is trapped on the START overlay. So delete the
+    # remembered screen and clear the pointer first, guaranteeing a fresh visible menu.
+    old = _screens.pop(message.chat.id, None)
+    if old is None:
+        v = await db.get_meta(f"scr_{message.chat.id}")
+        old = int(v) if v and v.isdigit() else None
+    if old:
+        await _safe_delete(message.bot, message.chat.id, old)
+    try:
+        await db.set_meta(f"scr_{message.chat.id}", "")
+    except Exception:  # noqa: BLE001
+        pass
     # Render the fresh screen FIRST so the chat is never momentarily empty
     # (an empty chat makes Telegram show the description + START overlay).
     await render_main(message.bot, message.chat.id)
