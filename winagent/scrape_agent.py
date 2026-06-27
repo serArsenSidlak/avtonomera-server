@@ -174,8 +174,18 @@ def _proxy_arg(proxy):
 
 
 async def _human(page, secs):
+    """Synthetic mouse moves + occasional wheel scroll to satisfy Akamai's sec-cpt challenge.
+
+    These are CDP-synthetic events (the visible cursor does not move), but they are what lets the
+    behavioural challenge pass — same approach the Mac scraper uses successfully.
+    """
     for i in range(secs):
         await page.mouse.move(random.randint(50, 1200), random.randint(50, 650), steps=random.randint(3, 9))
+        if i % 2 == 0:
+            try:
+                await page.mouse.wheel(0, random.randint(-150, 150))
+            except Exception:  # noqa: BLE001
+                pass
         await asyncio.sleep(1)
 
 
@@ -231,7 +241,17 @@ async def _scrape(region_names, proxy):
                 _log(f"Парсю {name}…")
                 try:
                     await page.goto(PAGE_URL, wait_until="domcontentloaded", timeout=60000)
-                    await page.wait_for_selector("#region", timeout=15000)
+                    try:
+                        await page.wait_for_selector("#region", timeout=15000)
+                    except Exception:
+                        # Akamai re-challenged on reload → re-pass it with mouse movement,
+                        # otherwise the region falsely fails (this is the main winagent bug).
+                        for _ in range(6):
+                            await _human(page, 4)
+                            if await page.evaluate("()=>document.querySelectorAll('select').length") > 0:
+                                break
+                            await asyncio.sleep(3)
+                        await page.wait_for_selector("#region", timeout=15000)
                     await page.select_option("#region", rv)
                     await asyncio.sleep(random.uniform(0.4, 1.0))
                     for sel in ("a.close_link", "text=Залишитись на основному сайті", "button.close"):
