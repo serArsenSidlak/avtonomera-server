@@ -1,0 +1,63 @@
+name: Build per-region agents
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'winagent/region_agent.py'
+      - 'winagent/scrape_agent.py'
+      - '.github/workflows/build-region-agents.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install deps
+        run: pip install -r winagent/requirements.txt
+
+      - name: Inject config (server URL + ingest secret)
+        shell: bash
+        run: |
+          cat > winagent/agent_config.py <<CFG
+          SERVER_URL = "https://34.123.136.171.nip.io"
+          INGEST_SECRET = "${{ secrets.INGEST_SECRET }}"
+          CFG
+
+      - name: Build base exe
+        working-directory: winagent
+        run: pyinstaller --onefile --collect-all playwright --name region_agent region_agent.py
+
+      - name: Make a copy per region (region comes from the file name)
+        working-directory: winagent
+        shell: pwsh
+        run: |
+          $regions = @('Вінницька','Волинська','Дніпропетровська','Донецька','Житомирська',
+            'Закарпатська','Запорізька','Івано-Франківська','Київська','Кіровоградська',
+            'Львівська','Миколаївська','Одеська','Полтавська','Рівненська','Сумська',
+            'Тернопільська','Харківська','Херсонська','Хмельницька','Черкаська',
+            'Чернівецька','Чернігівська','м.Київ')
+          New-Item -ItemType Directory -Force -Path dist/regions | Out-Null
+          foreach ($r in $regions) {
+            Copy-Item dist/region_agent.exe ("dist/regions/{0}.exe" -f $r)
+          }
+          Compress-Archive -Path dist/regions/*.exe -DestinationPath dist/region-agents.zip -Force
+          Get-ChildItem dist/regions
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: region-agents-latest
+          name: Автономера — exe по областях (latest)
+          files: |
+            winagent/dist/regions/*.exe
+            winagent/dist/region-agents.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

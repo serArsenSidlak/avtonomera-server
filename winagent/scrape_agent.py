@@ -44,6 +44,30 @@ _LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
                           "K": "К", "M": "М", "O": "О", "P": "Р", "T": "Т", "X": "Х"})
 _PRICE_RE = re.compile(r"[\d.,]+")
 
+
+def _ensure_chromium() -> None:
+    """Download Chromium into PLAYWRIGHT_BROWSERS_PATH on first run (frozen-exe safe).
+
+    A PyInstaller build bundles the Playwright driver (``--collect-all playwright``) but NOT the
+    browser binary, so on a fresh PC the first launch must fetch it. Subsequent runs find it
+    already present and skip. Safe to call every start.
+    """
+    try:
+        import subprocess
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+        cmd = compute_driver_executable()
+        cmd = list(cmd) if isinstance(cmd, (list, tuple)) else [cmd]
+        print("Перевіряю браузер (перший запуск може якийсь час качати Chromium)…", flush=True)
+        subprocess.run([*cmd, "install", "chromium"], env=get_driver_env(), check=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"(підготовка браузера) {exc}", flush=True)
+
+
+def _norm_region(s: str) -> str:
+    """Normalise a region label for fuzzy matching (drop 'область', spaces, punctuation, case)."""
+    s = (s or "").lower().replace("область", "")
+    return re.sub(r"[^a-zа-яіїєґ0-9]", "", s)
+
 # Shared state (guarded by _lock).
 _lock = threading.Lock()
 STATE = {
@@ -194,7 +218,15 @@ async def _scrape(region_names, proxy):
             targets = region_names or [n for _, n in all_regions]
             for name in targets:
                 rv = STATE["values"].get(name)
+                if not rv:  # fuzzy fallback: match e.g. "Львівська" → "Львівська область"
+                    nn = _norm_region(name)
+                    for dn, dv in STATE["values"].items():
+                        dnn = _norm_region(dn)
+                        if nn and (nn == dnn or nn in dnn or dnn in nn):
+                            rv, name = dv, dn
+                            break
                 if not rv:
+                    _log(f"{name}: немає такої області у списку порталу")
                     continue
                 _log(f"Парсю {name}…")
                 try:
