@@ -29,6 +29,20 @@ REGIONS = [
 ]
 
 
+# Latin aliases so the exe can also be renamed without Cyrillic (e.g. "Lvivska.exe").
+ALIASES = {
+    "vinnytska": "Вінницька", "volynska": "Волинська", "dnipropetrovska": "Дніпропетровська",
+    "dnipro": "Дніпропетровська", "donetska": "Донецька", "zhytomyrska": "Житомирська",
+    "zakarpatska": "Закарпатська", "zaporizka": "Запорізька", "ivanofrankivska": "Івано-Франківська",
+    "kyivska": "Київська", "kirovohradska": "Кіровоградська", "lvivska": "Львівська", "lviv": "Львівська",
+    "mykolaivska": "Миколаївська", "odeska": "Одеська", "odesa": "Одеська", "poltavska": "Полтавська",
+    "rivnenska": "Рівненська", "sumska": "Сумська", "ternopilska": "Тернопільська",
+    "kharkivska": "Харківська", "kharkiv": "Харківська", "khersonska": "Херсонська",
+    "khmelnytska": "Хмельницька", "cherkaska": "Черкаська", "chernivetska": "Чернівецька",
+    "chernihivska": "Чернігівська", "mkyiv": "м. Київ", "kyiv": "м. Київ", "kyivcity": "м. Київ",
+}
+
+
 def _resolve_region() -> str | None:
     """Pick the target region from argv[1] or the executable's own file name."""
     query = sys.argv[1] if len(sys.argv) > 1 else os.path.splitext(os.path.basename(sys.argv[0]))[0]
@@ -38,7 +52,9 @@ def _resolve_region() -> str | None:
     for r in REGIONS:  # exact (normalised) first
         if A._norm_region(r) == qn:
             return r
-    for r in REGIONS:  # then partial
+    if qn in ALIASES:  # Latin alias (Lvivska, Odesa, Kyiv…)
+        return ALIASES[qn]
+    for r in REGIONS:  # then partial Cyrillic
         rn = A._norm_region(r)
         if qn in rn or rn in qn:
             return r

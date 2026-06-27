@@ -35,10 +35,11 @@ jobs:
         working-directory: winagent
         run: pyinstaller --onefile --collect-all playwright --name region_agent region_agent.py
 
-      - name: Make a copy per region (region comes from the file name)
+      - name: Make a copy per region (region comes from the file name) + zip
         working-directory: winagent
         shell: pwsh
         run: |
+          $OutputEncoding = [System.Text.Encoding]::UTF8
           $regions = @('Вінницька','Волинська','Дніпропетровська','Донецька','Житомирська',
             'Закарпатська','Запорізька','Івано-Франківська','Київська','Кіровоградська',
             'Львівська','Миколаївська','Одеська','Полтавська','Рівненська','Сумська',
@@ -48,7 +49,23 @@ jobs:
           foreach ($r in $regions) {
             Copy-Item dist/region_agent.exe ("dist/regions/{0}.exe" -f $r)
           }
-          Compress-Archive -Path dist/regions/*.exe -DestinationPath dist/region-agents.zip -Force
+          # ASCII-named single exe for light downloads (GitHub mangles Cyrillic asset names).
+          Copy-Item dist/region_agent.exe dist/Avtonomera-oblast.exe
+          $readme = @"
+          Автономера - оновлення бази по областях
+
+          Як користуватись:
+          1. Візьми файл потрібної області (напр. "Львівська.exe").
+             Назва файлу = яка область сканується. Можна перейменувати будь-яку копію.
+          2. Запусти на компʼютері з УКРАЇНСЬКИМ інтернетом (інакше портал блокує).
+          3. Відкриється браузер, збере область і відправить на сервер. База оновиться.
+
+          Один файл "Avtonomera-oblast.exe" - універсальний: перейменуй його на назву
+          області (Cyrillic або латиницею: Lvivska.exe, Odesa.exe, Kyiv.exe) - і він
+          скануватиме саме її.
+          "@
+          Set-Content -Path dist/regions/ЯК-КОРИСТУВАТИСЬ.txt -Value $readme -Encoding UTF8
+          Compress-Archive -Path dist/regions/* -DestinationPath dist/region-agents.zip -Force
           Get-ChildItem dist/regions
 
       - name: Publish release
@@ -57,7 +74,7 @@ jobs:
           tag_name: region-agents-latest
           name: Автономера — exe по областях (latest)
           files: |
-            winagent/dist/regions/*.exe
+            winagent/dist/Avtonomera-oblast.exe
             winagent/dist/region-agents.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
