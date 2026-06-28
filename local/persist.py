@@ -42,10 +42,11 @@ def _fmt_plate_msg(plate: Dict[str, Any], hunt_name: str) -> str:
     )
 
 
-async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
+async def apply_scan(rows: List[Dict[str, Any]], ok_scopes, source: Optional[str] = None) -> Dict[str, Any]:
     """Persist scraped rows; mark removed only within successfully-scanned scopes.
 
-    Returns a summary dict including the list of new plate ids (for notifications).
+    ``source`` tags HOW the data arrived (e.g. 'mac', 'cabinet', 'opendata-exe') — recorded per
+    region for the admin panel. Returns a summary dict including the new plate ids (for notifs).
     """
     import datetime as dt
 
@@ -67,6 +68,8 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
     ok_scopes |= {(reg, "Мопед") for reg in scanned_regions}
     ok_scopes |= {(reg, "Електромопед") for reg in scanned_regions}
 
+    region_new: Dict[str, int] = defaultdict(int)
+    region_rem: Dict[str, int] = defaultdict(int)
     async with db.acquire() as conn:
         # Batched upsert (few round trips instead of one per row).
         upserted = await db.bulk_upsert_plates(conn, rows, now)
@@ -75,6 +78,7 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
             seen_by_scope[(u["region"], u["vehicle_type"])].append(u["id"])
             if u["inserted"]:
                 new_ids.append(u["id"])
+                region_new[u["region"]] += 1
                 if seeded:
                     new_events.append((u["plate_number"], u["region"], u["vehicle_type"], "new"))
         # TSC → region (once per distinct TSC).
@@ -89,6 +93,7 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
             ids = seen_by_scope.get((region, vtype), [])
             removed_rows = await db.mark_removed(conn, region, vtype, ids)
             removed += len(removed_rows)
+            region_rem[region] += len(removed_rows)
             for rr in removed_rows:
                 removed_events.append((rr["plate_number"], rr["region"], rr.get("vehicle_type"), "removed"))
         await db.log_feed_events_bulk(conn, new_events + removed_events)
@@ -97,6 +102,12 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
     if not seeded:
         await db.set_meta("seeded", "1")
     await db.set_meta("last_scan", now)
+    # Per-region scan log: time, source/method, and what changed (for the admin panel).
+    for reg in scanned_regions:
+        await db.set_meta(f"scan_at_{reg}", now)
+        await db.set_meta(f"scan_src_{reg}", source or "?")
+        await db.set_meta(f"scan_new_{reg}", str(region_new.get(reg, 0)))
+        await db.set_meta(f"scan_rem_{reg}", str(region_rem.get(reg, 0)))
     db.invalidate_cache()
     return {"scraped": len(rows), "new_ids": new_ids, "removed": removed}
 
@@ -166,7 +177,7 @@ async def commit_staging() -> Dict[str, Any]:
     if not ok_scopes:
         # Fallback: derive scopes from the rows themselves (misses zero-result scopes).
         ok_scopes = {(r.get("region"), r.get("vehicle_type")) for r in rows}
-    res = await apply_scan(rows, ok_scopes) if rows else {"scraped": 0, "new_ids": [], "removed": 0}
+    res = await apply_scan(rows, ok_scopes, source="cabinet") if rows else {"scraped": 0, "new_ids": [], "removed": 0}
     notified = await notify_new(res["new_ids"]) if rows else 0
     try:
         open(config.STAGE_PATH, "w", encoding="utf-8").close()

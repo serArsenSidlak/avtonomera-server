@@ -1516,6 +1516,53 @@ async def active_hunts(db: aiosqlite.Connection) -> List[Dict[str, Any]]:
     return [dict(r) for r in await cur.fetchall()]
 
 
+async def region_scan_status() -> List[Dict[str, Any]]:
+    """Per-region availability + last-seen (admin panel)."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT region, SUM(CASE WHEN is_available=1 THEN 1 ELSE 0 END) avail, "
+            "MAX(last_seen_at) last_seen FROM plates GROUP BY region ORDER BY region")
+        return [{"region": r[0], "avail": r[1], "last_seen": r[2]} for r in await cur.fetchall()]
+
+
+async def duration_buckets() -> Dict[str, int]:
+    """Counts by availability duration (removed in last 30 days). julianday → days."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT SUM(CASE WHEN d < 1.0/24 THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN d >= 1.0/24 AND d < 1 THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN d >= 1 AND d < 3 THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN d >= 3 THEN 1 ELSE 0 END), COUNT(*) "
+            "FROM (SELECT julianday(removed_at)-julianday(first_seen_at) d FROM plates "
+            " WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
+            "   AND julianday(removed_at) > julianday('now','-30 days'))")
+        r = await cur.fetchone()
+        return {"h1": r[0] or 0, "d1": r[1] or 0, "d3": r[2] or 0, "dm": r[3] or 0, "total": r[4] or 0}
+
+
+async def shortlived_plates(limit: int = 15) -> List[Dict[str, Any]]:
+    """Recently-removed plates available the shortest time."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT plate_number, region, vehicle_type, first_seen_at, removed_at, "
+            "(julianday(removed_at)-julianday(first_seen_at))*86400 secs FROM plates "
+            "WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
+            "  AND julianday(removed_at) > julianday('now','-14 days') "
+            "ORDER BY secs ASC LIMIT ?", (limit,))
+        return [{"plate_number": r[0], "region": r[1], "vehicle_type": r[2], "first_seen_at": r[3],
+                 "removed_at": r[4], "secs": r[5]} for r in await cur.fetchall()]
+
+
+async def recent_feed(limit: int = 30) -> List[Dict[str, Any]]:
+    """Most recent new/removed feed events."""
+    async with aiosqlite.connect(config.DB_PATH) as db:
+        cur = await db.execute(
+            "SELECT plate_number, region, vehicle_type, event, created_at "
+            "FROM feed_events ORDER BY created_at DESC LIMIT ?", (limit,))
+        return [{"plate_number": r[0], "region": r[1], "vehicle_type": r[2], "event": r[3],
+                 "created_at": r[4]} for r in await cur.fetchall()]
+
+
 async def already_notified(db: aiosqlite.Connection, hunt_id: int, plate_id: int) -> bool:
     """Whether this hunt was already notified about this plate."""
     cur = await db.execute(

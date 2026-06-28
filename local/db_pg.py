@@ -356,6 +356,52 @@ async def active_hunts(conn: asyncpg.Connection) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+async def region_scan_status() -> List[Dict[str, Any]]:
+    """Per-region availability + last-seen (admin panel). Source/time/diff come from meta."""
+    rows = await _fetch(
+        "SELECT region, COUNT(*) FILTER (WHERE is_available=1) avail, MAX(last_seen_at) last_seen "
+        "FROM plates GROUP BY region ORDER BY region"
+    )
+    return [dict(r) for r in rows]
+
+
+async def duration_buckets() -> Dict[str, int]:
+    """Counts of plates by how long they stayed available (removed in the last 30 days)."""
+    r = await _fetchrow(
+        "SELECT "
+        " COUNT(*) FILTER (WHERE d < interval '1 hour') h1,"
+        " COUNT(*) FILTER (WHERE d >= interval '1 hour' AND d < interval '1 day') d1,"
+        " COUNT(*) FILTER (WHERE d >= interval '1 day' AND d < interval '3 days') d3,"
+        " COUNT(*) FILTER (WHERE d >= interval '3 days') dm,"
+        " COUNT(*) total "
+        "FROM (SELECT (removed_at::timestamptz - first_seen_at::timestamptz) d FROM plates "
+        "      WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
+        "        AND removed_at::timestamptz > now() - interval '30 days') t"
+    )
+    return dict(r) if r else {}
+
+
+async def shortlived_plates(limit: int = 15) -> List[Dict[str, Any]]:
+    """Recently-removed plates that were available the SHORTEST time (most interesting)."""
+    rows = await _fetch(
+        "SELECT plate_number, region, vehicle_type, first_seen_at, removed_at, "
+        "       EXTRACT(EPOCH FROM (removed_at::timestamptz - first_seen_at::timestamptz)) secs "
+        "FROM plates WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
+        "  AND removed_at::timestamptz > now() - interval '14 days' "
+        "ORDER BY secs ASC LIMIT $1", limit
+    )
+    return [dict(r) for r in rows]
+
+
+async def recent_feed(limit: int = 30) -> List[Dict[str, Any]]:
+    """Most recent new/removed feed events (admin 'last scan' view)."""
+    rows = await _fetch(
+        "SELECT plate_number, region, vehicle_type, event, created_at "
+        "FROM feed_events ORDER BY created_at DESC LIMIT $1", limit
+    )
+    return [dict(r) for r in rows]
+
+
 async def already_notified(conn: asyncpg.Connection, hunt_id: int, plate_id: int) -> bool:
     """Whether this hunt was already notified about this plate."""
     return await conn.fetchval(

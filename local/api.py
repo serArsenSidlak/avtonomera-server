@@ -505,7 +505,7 @@ async def ingest(request: Request) -> dict:
 
     rows = body.get("rows") or []
     ok_scopes = {(s[0], s[1]) for s in (body.get("ok_scopes") or [])}
-    applied = await apply_scan(rows, ok_scopes)
+    applied = await apply_scan(rows, ok_scopes, source=body.get("source") or "opendata-exe")
     notified = await notify_new(applied["new_ids"])
     return {
         "scraped": applied["scraped"], "new": len(applied["new_ids"]),
@@ -757,7 +757,7 @@ async def collect_html(request: Request):
 
     present = sorted({r["vehicle_type"] for r in rows})
     ok_scopes = {(region, t) for t in present}
-    applied = await apply_scan(rows, ok_scopes)
+    applied = await apply_scan(rows, ok_scopes, source="opendata-web")
     notified = await notify_new(applied["new_ids"])
     result = {"region": region, "scraped": applied["scraped"], "new": len(applied["new_ids"]),
               "removed": applied["removed"], "notified": notified}
@@ -800,7 +800,7 @@ async def collect(request: Request):
 
     rows = body.get("rows") or []
     ok_scopes = {(s[0], s[1]) for s in (body.get("ok_scopes") or [])}
-    applied = await apply_scan(rows, ok_scopes)
+    applied = await apply_scan(rows, ok_scopes, source="opendata-web")
     notified = await notify_new(applied["new_ids"])
     result = {"scraped": applied["scraped"], "new": len(applied["new_ids"]),
               "removed": applied["removed"], "notified": notified}

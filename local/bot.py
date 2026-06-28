@@ -2747,11 +2747,105 @@ async def cb_a_an(cq: CallbackQuery) -> None:
     b = InlineKeyboardBuilder()
     b.button(text="📊 Статистика", callback_data="a_stats")
     b.button(text="👥 Користувачі", callback_data="a_users")
+    b.button(text="🗺 Регіони (стан/джерело)", callback_data="a_regions")
+    b.button(text="🔄 Останній скан", callback_data="a_lastscan")
+    b.button(text="⏱ Час життя номерів", callback_data="a_life")
     b.button(text="🔎 Активність", callback_data="a_activity")
     b.button(text="🐞 Звіти про помилки", callback_data="a_reports")
     b.button(text="⬅️ Адмінка", callback_data="admin")
-    b.adjust(2, 2, 1)
+    b.adjust(2, 1, 1, 2, 1)
     await show(cq.message.bot, cq.message.chat.id, "📊 <b>Аналітика</b>", b.as_markup())
+    await cq.answer()
+
+
+_SRC_LABEL = {"mac": "Мак", "cabinet": "кабінет", "opendata-exe": "exe-opendata",
+              "opendata-web": "opendata-web", "import": "імпорт", "?": "—"}
+
+
+def _ago(iso: str) -> str:
+    """Human 'DD.MM HH:MM (Nг тому)' from an ISO UTC timestamp, in Kyiv time."""
+    import datetime as _dt
+    if not iso:
+        return "—"
+    try:
+        d = _dt.datetime.fromisoformat(iso)
+        if d.tzinfo is None:
+            d = d.replace(tzinfo=_dt.timezone.utc)
+        from zoneinfo import ZoneInfo
+        now = _dt.datetime.now(_dt.timezone.utc)
+        mins = int((now - d).total_seconds() // 60)
+        ago = f"{mins} хв" if mins < 60 else (f"{mins // 60} год" if mins < 1440 else f"{mins // 1440} дн")
+        return f"{d.astimezone(ZoneInfo('Europe/Kyiv')):%d.%m %H:%M} ({ago} тому)"
+    except Exception:  # noqa: BLE001
+        return iso[:16]
+
+
+def _dur(secs) -> str:
+    """Format a duration in seconds as 'Xхв' / 'Xг Yхв' / 'Xд Yг'."""
+    try:
+        s = int(secs or 0)
+    except Exception:  # noqa: BLE001
+        return "—"
+    if s < 3600:
+        return f"{s // 60}хв"
+    if s < 86400:
+        return f"{s // 3600}г {s % 3600 // 60}хв"
+    return f"{s // 86400}д {s % 86400 // 3600}г"
+
+
+@dp.callback_query(F.data == "a_regions")
+async def cb_a_regions(cq: CallbackQuery) -> None:
+    """Per-region state: last update time, source/method, available count."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    rows = await db.region_scan_status()
+    lines = ["🗺 <b>Регіони — стан і джерело</b>\n"]
+    for r in rows:
+        reg = r["region"]
+        at = await db.get_meta(f"scan_at_{reg}")
+        src = _SRC_LABEL.get(await db.get_meta(f"scan_src_{reg}") or "?", await db.get_meta(f"scan_src_{reg}") or "—")
+        when = _ago(at) if at else _ago(r.get("last_seen"))
+        lines.append(f"<b>{reg}</b> — {fmt(r['avail'] or 0)} дост.\n   🕘 {when} · 📥 {src}")
+    await show(cq.message.bot, cq.message.chat.id, "\n".join(lines), kb_back([("⬅️ Аналітика", "a_an")]))
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_lastscan")
+async def cb_a_lastscan(cq: CallbackQuery) -> None:
+    """What was added / removed in the most recent scans."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    rows = await db.recent_feed(30)
+    if not rows:
+        await show(cq.message.bot, cq.message.chat.id, "🔄 <b>Останній скан</b>\n\nПодій ще немає.",
+                  kb_back([("⬅️ Аналітика", "a_an")]))
+        await cq.answer()
+        return
+    lines = ["🔄 <b>Останній скан — зміни</b>\n"]
+    for r in rows:
+        ico = "🟢" if r["event"] == "new" else "🔴"
+        lines.append(f"{ico} <b>{r['plate_number']}</b> · {r.get('region') or '—'} · {_ago(r['created_at'])}")
+    await show(cq.message.bot, cq.message.chat.id, "\n".join(lines), kb_back([("⬅️ Аналітика", "a_an")]))
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_life")
+async def cb_a_life(cq: CallbackQuery) -> None:
+    """How long plates stayed available: buckets + the shortest-lived ones."""
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    b = await db.duration_buckets()
+    short = await db.shortlived_plates(15)
+    lines = ["⏱ <b>Час життя номерів</b> <i>(зникли за 30 днів)</i>\n",
+             f"⚡ &lt;1 год: <b>{fmt(b.get('h1', 0))}</b>",
+             f"🕐 1 год–доба: <b>{fmt(b.get('d1', 0))}</b>",
+             f"📅 1–3 дні: <b>{fmt(b.get('d3', 0))}</b>",
+             f"📆 &gt;3 дні: <b>{fmt(b.get('dm', 0))}</b>",
+             f"Σ усього зникло: {fmt(b.get('total', 0))}\n",
+             "🔥 <b>Найшвидше зниклі</b> <i>(за 14 днів)</i>:"]
+    for r in short:
+        lines.append(f"• <b>{r['plate_number']}</b> · {r.get('region') or '—'} · був {_dur(r['secs'])}")
+    await show(cq.message.bot, cq.message.chat.id, "\n".join(lines), kb_back([("⬅️ Аналітика", "a_an")]))
     await cq.answer()
 
 
