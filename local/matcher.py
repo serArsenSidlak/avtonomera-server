@@ -14,6 +14,10 @@ def _pattern_ok(plate: Dict[str, Any], hunt: Dict[str, Any]) -> bool:
     if mt == "filters":
         if hunt.get("letters_start") and (plate.get("letters_start") or "").upper() != hunt["letters_start"].upper():
             return False
+        # Word-on-plate hunts (front+back letters) carry letters_end — it MUST be checked, else
+        # the hunt matches every plate that merely starts right (e.g. ВО****РР hitting ВО…JА).
+        if hunt.get("letters_end") and (plate.get("letters_end") or "").upper() != hunt["letters_end"].upper():
+            return False
         if hunt.get("digits_exact"):
             return digits == hunt["digits_exact"]
         if hunt.get("digits_mask"):
