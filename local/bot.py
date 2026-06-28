@@ -448,8 +448,8 @@ async def push_menu_wipe_all(bot: Bot, banner: str = "") -> int:
 
 
 async def _hourly_menu_loop(bot: Bot) -> None:
-    """Once at the top of each hour from MENU_HOURS_START..MENU_HOURS_END (Kyiv), broadcast a
-    fresh main menu and wipe the old conversation. Polls each minute and fires once per hour.
+    """Every MENU_INTERVAL_HOURS within MENU_HOURS_START..MENU_HOURS_END (Kyiv), broadcast a fresh
+    main menu and wipe the old conversation. Polls each minute, fires once per eligible hour.
     """
     from zoneinfo import ZoneInfo
     import datetime as dt
@@ -458,14 +458,17 @@ async def _hourly_menu_loop(bot: Bot) -> None:
     while True:
         try:
             now = dt.datetime.now(kyiv)
-            if config.MENU_HOURS_START <= now.hour <= config.MENU_HOURS_END and now.minute < 5:
+            in_window = config.MENU_HOURS_START <= now.hour <= config.MENU_HOURS_END
+            step = max(1, config.MENU_INTERVAL_HOURS)
+            on_interval = (now.hour - config.MENU_HOURS_START) % step == 0
+            if in_window and on_interval and now.minute < 5:
                 slot = (now.date(), now.hour)
                 if slot != last_slot:
                     last_slot = slot
                     n = await push_menu_wipe_all(bot)
-                    print(f"[hourly] {now:%Y-%m-%d %H:%M} menu → {n} chats")
+                    print(f"[menu] {now:%Y-%m-%d %H:%M} menu → {n} chats")
         except Exception as exc:  # noqa: BLE001
-            print(f"[hourly] loop: {exc!r}")
+            print(f"[menu] loop: {exc!r}")
         await asyncio.sleep(60)
 
 

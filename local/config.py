@@ -60,6 +60,8 @@ REFRESH_HOURS: int = int(os.environ.get("LOCAL_REFRESH_HOURS", "24"))
 MENU_BROADCAST: bool = os.environ.get("LOCAL_MENU_BROADCAST", "1") == "1"
 MENU_HOURS_START: int = int(os.environ.get("LOCAL_MENU_HOURS_START", "7"))
 MENU_HOURS_END: int = int(os.environ.get("LOCAL_MENU_HOURS_END", "21"))
+# Send every N hours within the window (counted from MENU_HOURS_START). Default 4 → 07/11/15/19.
+MENU_INTERVAL_HOURS: int = int(os.environ.get("LOCAL_MENU_INTERVAL_HOURS", "4"))
 
 # Viber bot (optional second channel). Token from partners.viber.com. Webhook on the server.
 VIBER_TOKEN: str = os.environ.get("LOCAL_VIBER_TOKEN", "")
