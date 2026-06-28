@@ -1553,12 +1553,22 @@ async def shortlived_plates(limit: int = 15) -> List[Dict[str, Any]]:
                  "removed_at": r[4], "secs": r[5]} for r in await cur.fetchall()]
 
 
-async def recent_feed(limit: int = 30) -> List[Dict[str, Any]]:
-    """Most recent new/removed feed events."""
+async def recent_feed(limit: int = 30, region: Optional[str] = None,
+                      vehicle_type: Optional[str] = None, event: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Most recent new/removed feed events, optionally filtered by region/type/event."""
+    where, args = [], []
+    if region:
+        where.append("region=?"); args.append(region)
+    if vehicle_type:
+        where.append("vehicle_type=?"); args.append(vehicle_type)
+    if event:
+        where.append("event=?"); args.append(event)
+    args.append(limit)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
     async with aiosqlite.connect(config.DB_PATH) as db:
         cur = await db.execute(
-            "SELECT plate_number, region, vehicle_type, event, created_at "
-            "FROM feed_events ORDER BY created_at DESC LIMIT ?", (limit,))
+            f"SELECT plate_number, region, vehicle_type, event, created_at "
+            f"FROM feed_events{wsql} ORDER BY created_at DESC LIMIT ?", tuple(args))
         return [{"plate_number": r[0], "region": r[1], "vehicle_type": r[2], "event": r[3],
                  "created_at": r[4]} for r in await cur.fetchall()]
 

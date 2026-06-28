@@ -393,12 +393,21 @@ async def shortlived_plates(limit: int = 15) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-async def recent_feed(limit: int = 30) -> List[Dict[str, Any]]:
-    """Most recent new/removed feed events (admin 'last scan' view)."""
+async def recent_feed(limit: int = 30, region: Optional[str] = None,
+                      vehicle_type: Optional[str] = None, event: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Most recent new/removed feed events, optionally filtered by region/type/event."""
+    where, args = [], []
+    if region:
+        args.append(region); where.append(f"region=${len(args)}")
+    if vehicle_type:
+        args.append(vehicle_type); where.append(f"vehicle_type=${len(args)}")
+    if event:
+        args.append(event); where.append(f"event=${len(args)}")
+    args.append(limit)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
     rows = await _fetch(
-        "SELECT plate_number, region, vehicle_type, event, created_at "
-        "FROM feed_events ORDER BY created_at DESC LIMIT $1", limit
-    )
+        f"SELECT plate_number, region, vehicle_type, event, created_at "
+        f"FROM feed_events{wsql} ORDER BY created_at DESC LIMIT ${len(args)}", *args)
     return [dict(r) for r in rows]
 
 

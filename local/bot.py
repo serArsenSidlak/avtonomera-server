@@ -2780,6 +2780,14 @@ def _ago(iso: str) -> str:
         return iso[:16]
 
 
+def _num(v) -> str:
+    """Thousands-spaced integer (module-level; the per-function `fmt` lambda isn't global)."""
+    try:
+        return f"{int(v or 0):,}".replace(",", " ")
+    except Exception:  # noqa: BLE001
+        return str(v)
+
+
 def _dur(secs) -> str:
     """Format a duration in seconds as 'Xхв' / 'Xг Yхв' / 'Xд Yг'."""
     try:
@@ -2805,27 +2813,105 @@ async def cb_a_regions(cq: CallbackQuery) -> None:
         at = await db.get_meta(f"scan_at_{reg}")
         src = _SRC_LABEL.get(await db.get_meta(f"scan_src_{reg}") or "?", await db.get_meta(f"scan_src_{reg}") or "—")
         when = _ago(at) if at else _ago(r.get("last_seen"))
-        lines.append(f"<b>{reg}</b> — {fmt(r['avail'] or 0)} дост.\n   🕘 {when} · 📥 {src}")
+        lines.append(f"<b>{reg}</b> — {_num(r['avail'] or 0)} дост.\n   🕘 {when} · 📥 {src}")
     await show(cq.message.bot, cq.message.chat.id, "\n".join(lines), kb_back([("⬅️ Аналітика", "a_an")]))
     await cq.answer()
 
 
+_ALS_VT = ["Легковий, вантажний", "Електромобіль", "Причіп", "Мотоцикл",
+           "Електромотоцикл", "Мопед", "Електромопед"]
+
+
+async def _render_lastscan(bot: Bot, chat: int) -> None:
+    """Render the 'last scan' diff, filtered by the admin's chosen region/type (in meta)."""
+    reg = (await db.get_meta(f"alsf_reg_{chat}")) or ""
+    vt = (await db.get_meta(f"alsf_vt_{chat}")) or ""
+    rows = await db.recent_feed(30, region=reg or None, vehicle_type=vt or None)
+    b = InlineKeyboardBuilder()
+    b.button(text=f"🌍 {reg or 'усі регіони'}", callback_data="a_ls_reg")
+    b.button(text=f"🚗 {vt or 'усі типи'}", callback_data="a_ls_vt")
+    if reg or vt:
+        b.button(text="✖ Скинути фільтр", callback_data="a_ls_reset")
+    b.button(text="⬅️ Аналітика", callback_data="a_an")
+    b.adjust(2, 1, 1)
+    sub = " · ".join(x for x in (reg, vt) if x)
+    lines = ["🔄 <b>Останній скан — зміни</b>" + (f"\n<i>{sub}</i>" if sub else "") + "\n"]
+    if not rows:
+        lines.append("Подій за цим фільтром немає.")
+    else:
+        for r in rows:
+            ico = "🟢" if r["event"] == "new" else "🔴"
+            lines.append(f"{ico} <b>{r['plate_number']}</b> · {r.get('region') or '—'} · "
+                         f"{r.get('vehicle_type') or '—'} · {_ago(r['created_at'])}")
+    await show(bot, chat, "\n".join(lines), b.as_markup())
+
+
 @dp.callback_query(F.data == "a_lastscan")
 async def cb_a_lastscan(cq: CallbackQuery) -> None:
-    """What was added / removed in the most recent scans."""
+    """What was added / removed in the most recent scans (filterable by region + type)."""
     if not await db.is_admin(cq.message.chat.id):
         return
-    rows = await db.recent_feed(30)
-    if not rows:
-        await show(cq.message.bot, cq.message.chat.id, "🔄 <b>Останній скан</b>\n\nПодій ще немає.",
-                  kb_back([("⬅️ Аналітика", "a_an")]))
-        await cq.answer()
+    await _render_lastscan(cq.message.bot, cq.message.chat.id)
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_ls_reset")
+async def cb_a_ls_reset(cq: CallbackQuery) -> None:
+    if not await db.is_admin(cq.message.chat.id):
         return
-    lines = ["🔄 <b>Останній скан — зміни</b>\n"]
-    for r in rows:
-        ico = "🟢" if r["event"] == "new" else "🔴"
-        lines.append(f"{ico} <b>{r['plate_number']}</b> · {r.get('region') or '—'} · {_ago(r['created_at'])}")
-    await show(cq.message.bot, cq.message.chat.id, "\n".join(lines), kb_back([("⬅️ Аналітика", "a_an")]))
+    await db.set_meta(f"alsf_reg_{cq.message.chat.id}", "")
+    await db.set_meta(f"alsf_vt_{cq.message.chat.id}", "")
+    await _render_lastscan(cq.message.bot, cq.message.chat.id)
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_ls_reg")
+async def cb_a_ls_reg(cq: CallbackQuery) -> None:
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    regions = [r["region"] for r in await db.region_scan_status()]
+    b = InlineKeyboardBuilder()
+    b.button(text="🌍 Усі регіони", callback_data="a_lsr:-1")
+    for i, rg in enumerate(regions):
+        b.button(text=rg, callback_data=f"a_lsr:{i}")
+    b.button(text="⬅️ Назад", callback_data="a_lastscan")
+    b.adjust(1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1)
+    await show(cq.message.bot, cq.message.chat.id, "🌍 <b>Оберіть регіон</b>", b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data.startswith("a_lsr:"))
+async def cb_a_lsr(cq: CallbackQuery) -> None:
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    i = int(cq.data.split(":")[1])
+    regions = [r["region"] for r in await db.region_scan_status()]
+    await db.set_meta(f"alsf_reg_{cq.message.chat.id}", regions[i] if 0 <= i < len(regions) else "")
+    await _render_lastscan(cq.message.bot, cq.message.chat.id)
+    await cq.answer()
+
+
+@dp.callback_query(F.data == "a_ls_vt")
+async def cb_a_ls_vt(cq: CallbackQuery) -> None:
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    b = InlineKeyboardBuilder()
+    b.button(text="🚗 Усі типи", callback_data="a_lsv:-1")
+    for i, t in enumerate(_ALS_VT):
+        b.button(text=t, callback_data=f"a_lsv:{i}")
+    b.button(text="⬅️ Назад", callback_data="a_lastscan")
+    b.adjust(1)
+    await show(cq.message.bot, cq.message.chat.id, "🚗 <b>Оберіть тип ТЗ</b>", b.as_markup())
+    await cq.answer()
+
+
+@dp.callback_query(F.data.startswith("a_lsv:"))
+async def cb_a_lsv(cq: CallbackQuery) -> None:
+    if not await db.is_admin(cq.message.chat.id):
+        return
+    i = int(cq.data.split(":")[1])
+    await db.set_meta(f"alsf_vt_{cq.message.chat.id}", _ALS_VT[i] if 0 <= i < len(_ALS_VT) else "")
+    await _render_lastscan(cq.message.bot, cq.message.chat.id)
     await cq.answer()
 
 
@@ -2837,11 +2923,11 @@ async def cb_a_life(cq: CallbackQuery) -> None:
     b = await db.duration_buckets()
     short = await db.shortlived_plates(15)
     lines = ["⏱ <b>Час життя номерів</b> <i>(зникли за 30 днів)</i>\n",
-             f"⚡ &lt;1 год: <b>{fmt(b.get('h1', 0))}</b>",
-             f"🕐 1 год–доба: <b>{fmt(b.get('d1', 0))}</b>",
-             f"📅 1–3 дні: <b>{fmt(b.get('d3', 0))}</b>",
-             f"📆 &gt;3 дні: <b>{fmt(b.get('dm', 0))}</b>",
-             f"Σ усього зникло: {fmt(b.get('total', 0))}\n",
+             f"⚡ &lt;1 год: <b>{_num(b.get('h1', 0))}</b>",
+             f"🕐 1 год–доба: <b>{_num(b.get('d1', 0))}</b>",
+             f"📅 1–3 дні: <b>{_num(b.get('d3', 0))}</b>",
+             f"📆 &gt;3 дні: <b>{_num(b.get('dm', 0))}</b>",
+             f"Σ усього зникло: {_num(b.get('total', 0))}\n",
              "🔥 <b>Найшвидше зниклі</b> <i>(за 14 днів)</i>:"]
     for r in short:
         lines.append(f"• <b>{r['plate_number']}</b> · {r.get('region') or '—'} · був {_dur(r['secs'])}")
