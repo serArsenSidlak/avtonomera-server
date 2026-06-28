@@ -365,8 +365,18 @@ async def region_scan_status() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+# A removal is GENUINE only if the plate was seen in 2+ scans (not a one-scan parse blip) and was
+# NOT re-found after its removal (Артур's rule: re-found later ⇒ not really removed).
+_GENUINE_REMOVED = (
+    "p.is_available=0 AND p.removed_at IS NOT NULL AND p.first_seen_at IS NOT NULL "
+    "AND p.last_seen_at > p.first_seen_at "
+    "AND NOT EXISTS (SELECT 1 FROM plates q WHERE q.plate_number=p.plate_number "
+    "                AND q.last_seen_at > p.removed_at)"
+)
+
+
 async def duration_buckets() -> Dict[str, int]:
-    """Counts of plates by how long they stayed available (removed in the last 30 days)."""
+    """Counts of GENUINELY-removed plates by how long they stayed available (last 30 days)."""
     r = await _fetchrow(
         "SELECT "
         " COUNT(*) FILTER (WHERE d < interval '1 hour') h1,"
@@ -374,20 +384,20 @@ async def duration_buckets() -> Dict[str, int]:
         " COUNT(*) FILTER (WHERE d >= interval '1 day' AND d < interval '3 days') d3,"
         " COUNT(*) FILTER (WHERE d >= interval '3 days') dm,"
         " COUNT(*) total "
-        "FROM (SELECT (removed_at::timestamptz - first_seen_at::timestamptz) d FROM plates "
-        "      WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
-        "        AND removed_at::timestamptz > now() - interval '30 days') t"
+        "FROM (SELECT (p.removed_at::timestamptz - p.first_seen_at::timestamptz) d FROM plates p "
+        f"      WHERE {_GENUINE_REMOVED} "
+        "        AND p.removed_at::timestamptz > now() - interval '30 days') t"
     )
     return dict(r) if r else {}
 
 
 async def shortlived_plates(limit: int = 15) -> List[Dict[str, Any]]:
-    """Recently-removed plates that were available the SHORTEST time (most interesting)."""
+    """Recently & GENUINELY-removed plates that were available the SHORTEST time."""
     rows = await _fetch(
-        "SELECT plate_number, region, vehicle_type, first_seen_at, removed_at, "
-        "       EXTRACT(EPOCH FROM (removed_at::timestamptz - first_seen_at::timestamptz)) secs "
-        "FROM plates WHERE removed_at IS NOT NULL AND first_seen_at IS NOT NULL "
-        "  AND removed_at::timestamptz > now() - interval '14 days' "
+        "SELECT p.plate_number, p.region, p.vehicle_type, p.first_seen_at, p.removed_at, "
+        "       EXTRACT(EPOCH FROM (p.removed_at::timestamptz - p.first_seen_at::timestamptz)) secs "
+        f"FROM plates p WHERE {_GENUINE_REMOVED} "
+        "  AND p.removed_at::timestamptz > now() - interval '14 days' "
         "ORDER BY secs ASC LIMIT $1", limit
     )
     return [dict(r) for r in rows]
