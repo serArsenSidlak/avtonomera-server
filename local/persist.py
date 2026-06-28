@@ -5,11 +5,27 @@ the DB (upsert, scope-safe mark_removed, reconcile, feed events) and notifies ma
 """
 from __future__ import annotations
 
+import re
 from collections import defaultdict
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from local import config, db
 from local.matcher import matches
+
+# Plates shaped "4 letters then digits" (region + 2 series letters + digits, no trailing letters)
+# are MOPEDS / e-mopeds in the registry — never cars or e-cars. Their series sits BEFORE the
+# digits, so the "last 2 chars" classifier read digits and wrongly defaulted them to
+# 'Легковий, вантажний'. Reclassify by the real series (chars 3-4) here, at every ingest path.
+_MOPED_FMT = re.compile(r"^[^\W\d]{2}([^\W\d]{2})\d+$", re.UNICODE)
+_EMOPED_FIRST = set("UVZNYQ")
+
+
+def _moped_vtype(plate: str) -> Optional[str]:
+    """Return 'Мопед'/'Електромопед' for the 4-letters-then-digits format, else None."""
+    m = _MOPED_FMT.match((plate or "").upper())
+    if not m:
+        return None
+    return "Електромопед" if m.group(1)[:1] in _EMOPED_FIRST else "Мопед"
 
 
 def _fmt_plate_msg(plate: Dict[str, Any], hunt_name: str) -> str:
@@ -39,6 +55,17 @@ async def apply_scan(rows: List[Dict[str, Any]], ok_scopes) -> Dict[str, Any]:
     seen_by_scope: Dict[Tuple[str, Any], List[int]] = defaultdict(list)
     removed = 0
     now = dt.datetime.now(dt.timezone.utc).isoformat()
+
+    # Reclassify the 4-letters-then-digits format → moped types (see _moped_vtype). The region was
+    # scanned whole (type=all), so also mark the moped scopes as covered → removals stay scope-safe.
+    ok_scopes = set(ok_scopes)
+    for r in rows:
+        mv = _moped_vtype(r.get("plate_number") or "")
+        if mv:
+            r["vehicle_type"] = mv
+    scanned_regions = {s[0] for s in ok_scopes}
+    ok_scopes |= {(reg, "Мопед") for reg in scanned_regions}
+    ok_scopes |= {(reg, "Електромопед") for reg in scanned_regions}
 
     async with db.acquire() as conn:
         # Batched upsert (few round trips instead of one per row).
