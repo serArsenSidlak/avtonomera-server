@@ -365,11 +365,11 @@ async def region_scan_status() -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-# A removal is GENUINE only if the plate was seen in 2+ scans (not a one-scan parse blip) and was
-# NOT re-found after its removal (Артур's rule: re-found later ⇒ not really removed).
+# A removal is GENUINE if the plate was NOT re-found after its removal (Артур's rule: a plate that
+# disappears and then re-appears in a later scan isn't really removed). One-scan plates that truly
+# appeared and vanished ARE kept — only the "removed then seen again" case is excluded.
 _GENUINE_REMOVED = (
     "p.is_available=0 AND p.removed_at IS NOT NULL AND p.first_seen_at IS NOT NULL "
-    "AND p.last_seen_at > p.first_seen_at "
     "AND NOT EXISTS (SELECT 1 FROM plates q WHERE q.plate_number=p.plate_number "
     "                AND q.last_seen_at > p.removed_at)"
 )

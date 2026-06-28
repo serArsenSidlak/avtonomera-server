@@ -1525,10 +1525,9 @@ async def region_scan_status() -> List[Dict[str, Any]]:
         return [{"region": r[0], "avail": r[1], "last_seen": r[2]} for r in await cur.fetchall()]
 
 
-# Genuine removal: seen in 2+ scans (not a one-scan blip) and not re-found after removal.
+# Genuine removal: not re-found after removal (one-scan genuine appear/disappear is kept).
 _GENUINE_REMOVED = (
     "p.is_available=0 AND p.removed_at IS NOT NULL AND p.first_seen_at IS NOT NULL "
-    "AND p.last_seen_at > p.first_seen_at "
     "AND NOT EXISTS (SELECT 1 FROM plates q WHERE q.plate_number=p.plate_number "
     "                AND q.last_seen_at > p.removed_at)"
 )
