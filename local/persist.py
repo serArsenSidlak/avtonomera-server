@@ -195,14 +195,21 @@ async def notify_new(new_ids: List[int]) -> int:
             hunts = await db.active_hunts(conn)
             if not hunts:
                 return 0
+            # Dedup by plate_number: the same plate can exist as several rows (one per vehicle
+            # type) and re-scans mint new ids — so notifying per plate_id sent duplicates (incl.
+            # the wrong-type twin). Keep one representative row per plate_number.
+            reps: Dict[str, Tuple[int, dict]] = {}
             for pid in new_ids:
                 plate = await db.get_plate(conn, pid)
                 if not plate:
                     continue
+                reps.setdefault(plate["plate_number"], (pid, plate))
+            for pid, plate in reps.values():
                 for hunt in hunts:
                     if not matches(plate, hunt):
                         continue
-                    if await db.already_notified(conn, hunt["id"], pid):
+                    # Persistent dedup by plate_number (covers other type-rows + earlier scans).
+                    if await db.already_notified_number(conn, hunt["id"], plate["plate_number"]):
                         continue
                     try:
                         msg = await bot.send_message(hunt["chat_id"], _fmt_plate_msg(plate, hunt.get("name")))

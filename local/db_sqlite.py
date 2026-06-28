@@ -1524,6 +1524,15 @@ async def already_notified(db: aiosqlite.Connection, hunt_id: int, plate_id: int
     return await cur.fetchone() is not None
 
 
+async def already_notified_number(db: aiosqlite.Connection, hunt_id: int, plate_number: str) -> bool:
+    """Whether this hunt was already notified about this plate NUMBER (any type-row / re-scan)."""
+    cur = await db.execute(
+        "SELECT 1 FROM notified n JOIN plates p ON p.id = n.plate_id "
+        "WHERE n.hunt_id=? AND p.plate_number=? LIMIT 1", (hunt_id, plate_number)
+    )
+    return await cur.fetchone() is not None
+
+
 async def record_notified(db: aiosqlite.Connection, hunt_id: int, plate_id: int) -> None:
     """Record that a notification was sent."""
     await db.execute(

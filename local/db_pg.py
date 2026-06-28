@@ -363,6 +363,18 @@ async def already_notified(conn: asyncpg.Connection, hunt_id: int, plate_id: int
     ) is not None
 
 
+async def already_notified_number(conn: asyncpg.Connection, hunt_id: int, plate_number: str) -> bool:
+    """Whether this hunt was already notified about this plate NUMBER (any type-row / re-scan).
+
+    A plate can exist as several rows (one per vehicle type) and re-scans create new ids — so the
+    per-plate_id check let the same number notify twice. Dedup by number kills the duplicates.
+    """
+    return await conn.fetchval(
+        "SELECT 1 FROM notified n JOIN plates p ON p.id = n.plate_id "
+        "WHERE n.hunt_id=$1 AND p.plate_number=$2 LIMIT 1", hunt_id, plate_number
+    ) is not None
+
+
 async def record_notified(conn: asyncpg.Connection, hunt_id: int, plate_id: int) -> None:
     """Record that a notification was sent."""
     await conn.execute(
