@@ -236,14 +236,16 @@ async def show(bot: Bot, chat_id: int, text: str, kb: InlineKeyboardMarkup) -> N
         v = await db.get_meta(f"scr_{chat_id}")
         if v and v.isdigit():
             mid = int(v)
-    if mid is not None:
-        await _safe_delete(bot, chat_id, mid)  # прибрати старий екран
+    # Send the NEW screen FIRST, THEN delete the old one — so the chat is never momentarily empty
+    # (an empty chat makes Telegram pop the bot-description + START overlay). Order matters.
     msg = await bot.send_message(chat_id, text, reply_markup=kb)
     _screens[chat_id] = msg.message_id
     try:
         await db.set_meta(f"scr_{chat_id}", str(msg.message_id))
     except Exception:  # noqa: BLE001
         pass
+    if mid is not None and mid != msg.message_id:
+        await _safe_delete(bot, chat_id, mid)  # прибрати старий екран лише ПІСЛЯ нового
 
 
 async def _safe_delete(bot: Bot, chat_id: int, message_id: int) -> None:
