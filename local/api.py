@@ -11,7 +11,7 @@ from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, Response
 
 from local import config, db
 
@@ -23,7 +23,7 @@ app.add_middleware(
 PAGE = 20
 
 # Public endpoints that never require the app key.
-_OPEN_PATHS = {"/health", "/open", "/pitch", "/features"}
+_OPEN_PATHS = {"/health", "/open", "/pitch", "/features", "/", "/robots.txt", "/sitemap.xml"}
 # Simple in-memory per-IP rate limiter (one uvicorn worker). minute-bucket -> {ip: count}.
 _rate_bucket: dict = {}
 _rate_minute: list = [0]
@@ -405,6 +405,160 @@ async def pitch() -> str:
 async def features() -> str:
     """Детальна презентація функціоналу + опис головного меню."""
     return _FEATURES_HTML
+
+
+_BOT_URL = "https://t.me/nomer_na_avto_bot"
+
+_LANDING_HTML = '''<!doctype html><html lang="uk"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Перевірка авто за номером і VIN · Підбір красивих номерів — База Автономерів України</title>
+<meta name="description" content="Перевірка авто за номером або VIN: марка, рік, історія реєстрацій, розшук, ринкова ціна. Підбір і моніторинг красивих та вільних номерів ГСЦ МВС по всій Україні. Безкоштовно в Telegram.">
+<meta name="keywords" content="перевірка авто за номером, перевірити авто за VIN, історія авто, вільні номери, красиві номери, номери ГСЦ МВС, підбір номера, база автономерів, перевірка номера, автономер Україна">
+<link rel="canonical" href="https://34.123.136.171.nip.io/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="База Автономерів України — перевірка авто за номером і підбір красивих номерів">
+<meta property="og:description" content="Перевір будь-яке авто за номером/VIN і знайди номер мрії. Безкоштовно в Telegram.">
+<meta property="og:locale" content="uk_UA">
+<meta name="robots" content="index,follow">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0e14;color:#eef1f6;line-height:1.55;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.wrap{max-width:880px;margin:0 auto;padding:0 18px}
+.hero{background:radial-gradient(1200px 500px at 50% -10%,#15366e 0%,#0b0e14 60%);padding:64px 0 48px;text-align:center}
+.brand{display:inline-flex;align-items:center;gap:8px;font-weight:900;letter-spacing:.5px;color:#cfe0ff;margin-bottom:18px}
+.badge{background:#ffd700;color:#0b0e14;border-radius:6px;padding:2px 7px;font-size:13px;font-weight:900}
+h1{font-size:34px;font-weight:900;line-height:1.18;margin-bottom:14px}
+h1 span{color:#5b9bff}
+.sub{color:#aab6c8;font-size:17px;max-width:620px;margin:0 auto 28px}
+.cta{display:inline-flex;align-items:center;gap:9px;background:linear-gradient(135deg,#2f80ff,#1456d8);color:#fff;font-weight:800;font-size:17px;padding:15px 28px;border-radius:14px;box-shadow:0 10px 30px rgba(47,128,255,.35)}
+.cta.ghost{background:#161b24;box-shadow:none;border:1px solid #222a36}
+.ctas{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.stats{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:34px}
+.stat{background:#11161f;border:1px solid #1d2430;border-radius:14px;padding:14px 18px;min-width:140px}
+.stat b{display:block;font-size:24px;color:#5b9bff}
+.stat span{color:#8b95a7;font-size:13px}
+section{padding:46px 0;border-top:1px solid #141a23}
+h2{font-size:24px;font-weight:800;margin-bottom:18px}
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.card{background:#11161f;border:1px solid #1d2430;border-radius:16px;padding:18px}
+.card h3{font-size:17px;margin-bottom:7px;color:#eaf0fa}
+.card p{color:#9aa4b2;font-size:14.5px}
+.steps{counter-reset:s;display:grid;gap:12px}
+.step{background:#11161f;border:1px solid #1d2430;border-radius:14px;padding:16px 16px 16px 56px;position:relative}
+.step:before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:14px;width:28px;height:28px;border-radius:50%;background:#2f80ff;color:#fff;font-weight:800;display:flex;align-items:center;justify-content:center}
+.faq dt{font-weight:700;margin-top:16px;color:#eaf0fa}
+.faq dd{color:#9aa4b2;font-size:14.5px;margin-top:4px}
+footer{padding:34px 0 50px;color:#6b7585;font-size:13px;text-align:center;border-top:1px solid #141a23}
+.center{text-align:center;margin-top:26px}
+@media(max-width:620px){h1{font-size:27px}.cards{grid-template-columns:1fr}}
+</style>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@graph":[
+{"@type":"WebSite","name":"База Автономерів України","url":"https://34.123.136.171.nip.io/","inLanguage":"uk"},
+{"@type":"SoftwareApplication","name":"База Автономерів — перевірка авто та підбір номерів","applicationCategory":"UtilitiesApplication","operatingSystem":"Telegram, iOS","offers":{"@type":"Offer","price":"0","priceCurrency":"UAH"}},
+{"@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Як перевірити авто за номером?","acceptedAnswer":{"@type":"Answer","text":"Введіть державний номер або VIN у боті — отримаєте марку, модель, рік, обʼєм, паливо, колір, історію реєстрацій та перевірку на розшук. Дані з відкритого реєстру МВС."}},
+{"@type":"Question","name":"Це безкоштовно?","acceptedAnswer":{"@type":"Answer","text":"Так, базова перевірка та пошук номерів — безкоштовні в Telegram-боті."}},
+{"@type":"Question","name":"Як знайти або відстежити красивий номер?","acceptedAnswer":{"@type":"Answer","text":"Оберіть серію, регіон, цифри чи ціну — бот покаже доступні номери ГСЦ МВС. Якщо потрібного зараз немає, увімкніть моніторинг і отримаєте сповіщення, щойно він зʼявиться."}},
+{"@type":"Question","name":"Звідки беруться дані?","acceptedAnswer":{"@type":"Answer","text":"Лише з відкритих джерел: портал доступних номерів ГСЦ МВС і відкритий реєстр транспортних засобів МВС (data.gov.ua), деперсоналізовано."}}
+]}]}
+</script>
+</head><body>
+
+<div class="hero"><div class="wrap">
+<div class="brand">🇺🇦 NOMER <span class="badge">DB</span> · База Автономерів України</div>
+<h1>Перевірка авто за номером і VIN.<br><span>Підбір красивих номерів.</span></h1>
+<p class="sub">Дізнайся все про авто за держномером або VIN — марка, рік, історія, розшук, ринкова ціна. Знайди і відстеж номер мрії серед усіх номерів ГСЦ МВС по Україні. Безкоштовно в Telegram.</p>
+<div class="ctas">
+<a class="cta" href="''' + _BOT_URL + '''">🚀 Відкрити в Telegram</a>
+<a class="cta ghost" href="#how">Як це працює</a>
+</div>
+<div class="stats">
+<div class="stat"><b>20&nbsp;млн+</b><span>записів реєстру МВС</span></div>
+<div class="stat"><b>{{AVAIL}}</b><span>номерів у продажу</span></div>
+<div class="stat"><b>25</b><span>регіонів України</span></div>
+</div>
+</div></div>
+
+<section><div class="wrap">
+<h2>🚗 Перевірка авто за номером або VIN</h2>
+<div class="cards">
+<div class="card"><h3>Марка, модель, рік</h3><p>Повні технічні дані: обʼєм, паливо, колір, тип кузова — за держномером або VIN-кодом.</p></div>
+<div class="card"><h3>Історія реєстрацій</h3><p>Коли і де авто реєстрували та перереєстровували — видно «біографію» машини перед купівлею.</p></div>
+<div class="card"><h3>Перевірка на розшук</h3><p>Чи не перебуває авто в розшуку — за відкритим датасетом МВС (78&nbsp;000+ авто).</p></div>
+<div class="card"><h3>Ринкова ціна</h3><p>Орієнтовна вартість на ринку (за даними оголошень) — щоб не переплатити.</p></div>
+</div>
+</div></section>
+
+<section><div class="wrap">
+<h2>✨ Підбір і моніторинг номерів</h2>
+<div class="cards">
+<div class="card"><h3>Красиві комбінації</h3><p>Однакові, дзеркальні, пари, круглі, низькі — добірки найгарніших вільних номерів.</p></div>
+<div class="card"><h3>Пошук за параметрами</h3><p>Серія, регіон, цифри, ціна, навіть «слово на номері» (перші+останні літери).</p></div>
+<div class="card"><h3>Моніторинг</h3><p>Немає потрібного зараз? Увімкни стеження — сповістимо, щойно номер зʼявиться у продажу.</p></div>
+<div class="card"><h3>Уся база</h3><p>Зайняті, вільні та номери у продажу по всіх 25 регіонах — навіть архів зниклих.</p></div>
+</div>
+</div></section>
+
+<section id="how"><div class="wrap">
+<h2>Як це працює</h2>
+<div class="steps">
+<div class="step"><b>Відкрий бота</b> в Telegram — нічого встановлювати не треба.</div>
+<div class="step"><b>Введи номер або VIN</b> — для перевірки авто; або обери серію/регіон — для підбору номера.</div>
+<div class="step"><b>Отримай результат</b> миттєво. Постав моніторинг — і лови потрібний номер першим.</div>
+</div>
+<div class="center"><a class="cta" href="''' + _BOT_URL + '''">🚀 Спробувати безкоштовно</a></div>
+</div></section>
+
+<section class="faq"><div class="wrap">
+<h2>Часті питання</h2>
+<dl>
+<dt>Як перевірити авто за номером?</dt>
+<dd>Введіть держномер або VIN у боті — отримаєте марку, модель, рік, історію реєстрацій і перевірку на розшук. Дані з відкритого реєстру МВС.</dd>
+<dt>Це безкоштовно?</dt>
+<dd>Так, базова перевірка авто й пошук номерів — безкоштовні.</dd>
+<dt>Як знайти красивий номер?</dt>
+<dd>Оберіть серію, регіон, цифри або ціну — бот покаже доступні номери ГСЦ МВС. Немає потрібного — увімкніть моніторинг.</dd>
+<dt>Звідки дані?</dt>
+<dd>Лише відкриті джерела: портал доступних номерів ГСЦ МВС і відкритий реєстр МВС (data.gov.ua), деперсоналізовано. Жодних зливів чи персональних даних.</dd>
+</dl>
+</div></section>
+
+<footer><div class="wrap">
+База Автономерів України · перевірка авто за номером і VIN, підбір та моніторинг номерів ГСЦ МВС.<br>
+<a href="''' + _BOT_URL + '''" style="color:#5b9bff">@nomer_na_avto_bot</a> · Дані з відкритих джерел МВС (data.gov.ua)
+</div></footer>
+
+</body></html>'''
+
+
+@app.get("/", response_class=HTMLResponse)
+async def landing() -> str:
+    """SEO landing page (Ukrainian) — captures search traffic, converts to the Telegram bot."""
+    try:
+        s = await db.get_stats()
+        avail = f"{int(s.get('available') or 0):,}".replace(",", " ")
+    except Exception:  # noqa: BLE001
+        avail = "260 000+"
+    return _LANDING_HTML.replace("{{AVAIL}}", avail)
+
+
+@app.get("/robots.txt", response_class=PlainTextResponse)
+async def robots() -> str:
+    """Allow crawling + point to the sitemap."""
+    return "User-agent: *\nAllow: /\nSitemap: https://34.123.136.171.nip.io/sitemap.xml\n"
+
+
+@app.get("/sitemap.xml")
+async def sitemap() -> Response:
+    """Minimal sitemap for the public pages."""
+    base = "https://34.123.136.171.nip.io"
+    items = "".join(f"<url><loc>{base}{u}</loc></url>" for u in ("/", "/features", "/pitch"))
+    xml = ('<?xml version="1.0" encoding="UTF-8"?>'
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + items + '</urlset>')
+    return Response(content=xml, media_type="application/xml")
 
 
 @app.get("/stats")
