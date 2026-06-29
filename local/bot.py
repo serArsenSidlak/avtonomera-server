@@ -2293,6 +2293,29 @@ async def render_results(bot: Bot, chat_id: int, state: FSMContext) -> None:
     else:
         crumbs = _summary(f)
     if not rows:
+        # Fallback to the ARCHIVE: numbers once in our parsed base that have since disappeared
+        # (likely already registered). Артур: a once-seen number must stay findable later.
+        arch = await db.search_filtered(limit=_GRID, only_available=False, **kw)
+        arch = [r for r in arch if not r.get("is_available")]
+        if arch:
+            b = InlineKeyboardBuilder()
+            for r in arch:
+                b.button(text=f"📦 {r['plate_number']}", callback_data=f"pd:{r['plate_number']}")
+            b.button(text="🔔 Стежити за такими (моніторинг)", callback_data="mk_hunt")
+            b.button(text="🔄 Новий пошук", callback_data="search")
+            b.button(text="⬅️ Меню", callback_data="menu")
+            n = len(arch)
+            layout = [3] * (n // 3) + ([n % 3] if n % 3 else []) + [1, 1, 1]
+            b.adjust(*layout)
+            await show(
+                bot, chat_id,
+                f"🔍 <b>У продажу зараз нема</b>\n<i>{crumbs}</i>\n\n"
+                f"📦 Але є в <b>нашій базі</b> ({n}) — ці номери були доступні раніше й зникли "
+                "(ймовірно, вже зареєстровані). Тисни номер — покажу деталі й коли зник.\n\n"
+                "🔔 Або постав моніторинг — сповіщу, якщо зʼявиться знову.",
+                b.as_markup(),
+            )
+            return
         b = InlineKeyboardBuilder()
         b.button(text="🔔 Стежити за такими (моніторинг)", callback_data="mk_hunt")
         b.button(text="🔄 Новий пошук", callback_data="search")
