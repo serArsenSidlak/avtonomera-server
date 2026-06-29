@@ -224,29 +224,20 @@ def kb_back(extra: Optional[list] = None) -> InlineKeyboardMarkup:
 
 
 async def show(bot: Bot, chat_id: int, text: str, kb: InlineKeyboardMarkup) -> None:
-    """Edit the chat's single screen message, or create it if missing/lost.
+    """Show the single screen by DELETING the previous one and sending a NEW message.
 
-    The screen message id is persisted in the DB so it survives бот-рестарти/деплої —
-    інакше після кожного перезапуску бот «забував» екран і слав НОВЕ повідомлення
-    (звідси «чистий екран не завжди працює»). На збій редагування — прибираємо старий
-    екран, щоб не лишати сміття.
+    A fresh message (not an edit-in-place) refreshes the timestamp and lifts the chat to the top of
+    Telegram's list on every interaction (owner request — otherwise the bubble froze e.g. at 11:01).
+    The previous screen id comes from memory or the DB (survives бот-рестарти/деплої) and is removed
+    first so only one clean screen remains.
     """
-    mid = _screens.get(chat_id)
+    mid = _screens.pop(chat_id, None)
     if mid is None:  # памʼять порожня (напр. після рестарту) → беремо з БД
         v = await db.get_meta(f"scr_{chat_id}")
         if v and v.isdigit():
             mid = int(v)
-            _screens[chat_id] = mid
     if mid is not None:
-        try:
-            await bot.edit_message_text(text, chat_id=chat_id, message_id=mid, reply_markup=kb)
-            return
-        except TelegramBadRequest as e:
-            if "not modified" in str(e).lower():  # той самий вміст — лишаємо як є
-                return
-            await _safe_delete(bot, chat_id, mid)  # застарілий екран → прибрати
-        except Exception:
-            await _safe_delete(bot, chat_id, mid)
+        await _safe_delete(bot, chat_id, mid)  # прибрати старий екран
     msg = await bot.send_message(chat_id, text, reply_markup=kb)
     _screens[chat_id] = msg.message_id
     try:
