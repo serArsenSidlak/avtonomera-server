@@ -605,7 +605,11 @@ def _ac_detect(query: str):
     alnum = _re.sub(r"[^A-Z0-9]", "", q)
     # VIN: лат. літери+цифри, ≥10 символів, без кирилиці. Інакше — номер.
     is_vin = bool(_re.search(r"\d", q)) and len(alnum) >= 10 and not _re.search(r"[А-ЯІЇЄҐ]", q)
-    return ("vin", alnum) if is_vin else ("plate", _re.sub(r"[\s\-]", "", q))
+    if is_vin:
+        # VIN ніколи не містить літер O/I/Q — це завжди 0/1/0. Люди їх часто плутають,
+        # тому авто-виправляємо, інакше пошук нічого не знаходить (напр. …UODZ… → …U0DZ…).
+        return ("vin", alnum.translate(str.maketrans({"O": "0", "I": "1", "Q": "0"})))
+    return ("plate", _re.sub(r"[\s\-]", "", q))
 
 
 async def _autocheck_query(query: str) -> dict:
