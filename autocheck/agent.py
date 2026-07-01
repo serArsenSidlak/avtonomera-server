@@ -375,6 +375,148 @@ def _build_local() -> None:
             STATE["loading"] = False
 
 
+# ── Universal import: залити БУДЬ-ЯКИЙ дамп; нові колонки додаються самі ──────────────────────
+_CANON_MAP = {
+    "VIN": "vin", "N_REG_NEW": "plate", "BRAND": "brand", "MODEL": "model", "MAKE_YEAR": "make_year",
+    "COLOR": "color", "KIND": "kind", "BODY": "body", "PURPOSE": "purpose", "FUEL": "fuel",
+    "CAPACITY": "capacity", "OWN_WEIGHT": "own_weight", "TOTAL_WEIGHT": "total_weight",
+    "D_REG": "d_reg", "OPER_CODE": "oper_code", "OPER_NAME": "oper_name", "DEP_CODE": "dep_code",
+    "DEP": "dep", "REG_ADDR_KOATUU": "reg_addr_koatuu", "PERSON": "person",
+}
+
+
+def _san_col(raw):
+    """Безпечна назва sqlite-колонки з довільного заголовка дампа."""
+    c = re.sub(r"[^a-z0-9_]", "_", (raw or "").strip().lower())
+    return re.sub(r"_+", "_", c).strip("_") or "col"
+
+
+def _table_cols(con):
+    return {r[1] for r in con.execute("PRAGMA table_info(vehicle_ops)")}
+
+
+def _import_csv(con, csv_path, src_year=None):
+    """Залити один CSV. Відомі поля мапляться на канонічні; НЕВІДОМІ — стають новими колонками."""
+    with open(csv_path, encoding="utf-8", errors="replace", newline="") as fh:
+        header = fh.readline()
+    delim = ";" if header.count(";") >= header.count(",") else ","
+    existing = _table_cols(con)
+    added = []
+    with open(csv_path, encoding="utf-8", errors="replace", newline="") as fh:
+        r = csv.DictReader(fh, delimiter=delim)
+        colmap = {}
+        for h in (r.fieldnames or []):
+            col = _CANON_MAP.get((h or "").strip().upper()) or _san_col(h)
+            colmap[h] = col
+            if col and col not in existing:
+                con.execute(f'ALTER TABLE vehicle_ops ADD COLUMN "{col}" TEXT')
+                existing.add(col)
+                added.append(col)
+        for c in ("letters_start", "digits", "letters_end", "src_year"):
+            if c not in existing:
+                con.execute(f'ALTER TABLE vehicle_ops ADD COLUMN "{c}" TEXT')
+                existing.add(c)
+        cols = []
+        for c in list(colmap.values()) + ["letters_start", "digits", "letters_end", "src_year"]:
+            if c not in cols:
+                cols.append(c)
+        ins = f'INSERT INTO vehicle_ops ({",".join(chr(34) + c + chr(34) for c in cols)}) ' \
+              f'VALUES ({",".join("?" * len(cols))})'
+        n, batch = 0, []
+        for row in r:
+            vals = {}
+            for h, col in colmap.items():
+                v = (row.get(h) or "").strip()
+                if col == "plate":
+                    v = _norm_plate(v)
+                elif col == "vin":
+                    v = v.upper() or None
+                elif col == "d_reg":
+                    v = _iso(v)
+                vals[col] = v or None
+            ls, dg, le = _plate_parts(vals.get("plate")) if vals.get("plate") else (None, None, None)
+            vals.update(letters_start=ls, digits=dg, letters_end=le, src_year=src_year)
+            batch.append(tuple(vals.get(c) for c in cols))
+            if len(batch) >= 20000:
+                con.executemany(ins, batch)
+                n += len(batch)
+                batch = []
+        if batch:
+            con.executemany(ins, batch)
+            n += len(batch)
+    con.commit()
+    return n, added
+
+
+def _import_folder() -> None:
+    """Універсальний імпорт: залити всі CSV/ZIP з папки 'import' поряд із програмою У НАЯВНУ базу
+    (додаємо, не перезаписуємо). Будь-які нові поля стають новими колонками автоматично."""
+    with _lock:
+        if STATE["loading"]:
+            return
+        STATE["loading"] = True
+    try:
+        base = _dumps_dir()
+        folder = os.path.join(base, "import")
+        files = []
+        for d in (folder, base):
+            if os.path.isdir(d):
+                for f in sorted(os.listdir(d)):
+                    if f.lower().endswith((".csv", ".zip")) and "reestr" not in f.lower():
+                        files.append(os.path.join(d, f))
+        if not files:
+            _log("Немає файлів. Поклади CSV/ZIP у папку 'import' поряд із програмою і натисни ще раз.")
+            return
+        con = _connect()
+        _ensure_schema(con)
+        con.execute("PRAGMA journal_mode=OFF")
+        con.execute("PRAGMA synchronous=OFF")
+        total, allcols = 0, []
+        for path in files:
+            ym = re.search(r"(20\d{2})", os.path.basename(path))
+            sy = int(ym.group(1)) if ym else None
+            try:
+                if path.lower().endswith(".zip"):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        with zipfile.ZipFile(path) as zf:
+                            names = _zip_data_names(zf)
+                            zf.extractall(tmp)
+                        for nm in names:
+                            n, added = _import_csv(con, os.path.join(tmp, nm), sy)
+                            total += n
+                            allcols += added
+                            _log(f"{os.path.basename(path)}: +{n}" + (f" · нові поля: {', '.join(added)}" if added else ""))
+                else:
+                    n, added = _import_csv(con, path, sy)
+                    total += n
+                    allcols += added
+                    _log(f"{os.path.basename(path)}: +{n}" + (f" · нові поля: {', '.join(added)}" if added else ""))
+            except Exception as exc:  # noqa: BLE001
+                _log(f"{os.path.basename(path)}: помилка ({exc}) ❌")
+        for idx in ("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)",
+                    "CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)",
+                    "CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)",
+                    "CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)"):
+            con.execute(idx)
+        con.commit()
+        con.close()
+        with _lock:
+            STATE["db_rows"] = _db_count()
+        cols_msg = f" · додано колонок: {len(set(allcols))} ({', '.join(sorted(set(allcols)))})" if allcols else ""
+        _log(f"Імпорт завершено: +{total} рядків{cols_msg}. Усього в базі: {STATE['db_rows']}.")
+    except Exception as exc:  # noqa: BLE001
+        _log(f"Помилка імпорту: {exc}")
+    finally:
+        with _lock:
+            STATE["loading"] = False
+
+
+_KNOWN_COLS = {"vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel",
+               "capacity", "purpose", "own_weight", "total_weight", "d_reg", "oper_code", "oper_name",
+               "dep_code", "dep", "reg_addr_koatuu", "person", "src_year", "letters_start", "digits",
+               "letters_end"}
+
+
 def _lookup(plate=None, vin=None) -> dict:
     # Сортуємо за роком дампу (надійний тег), потім за датою; рядки без дати (нові
     # переоформлення часто без D_REG) — В КІНЦІ року, бо вони найсвіжіші. Так останній
@@ -403,7 +545,10 @@ def _lookup(plate=None, vin=None) -> dict:
     history = [{"d_reg": r["d_reg"], "oper_name": r["oper_name"], "dep": r["dep"],
                 "plate": r["plate"], "vin": r["vin"], "brand": r["brand"],
                 "model": r["model"], "make_year": r["make_year"]} for r in reversed(rows)]
-    return {"found": True, "vehicle": veh, "first_reg": first_reg, "history": history}
+    # Будь-які ДОДАТКОВІ поля (юр.особа, відмітки, власники…), залиті універсальним імпортом.
+    extra = {k: last[k] for k in last.keys()
+             if k not in _KNOWN_COLS and last[k] not in (None, "")}
+    return {"found": True, "vehicle": veh, "first_reg": first_reg, "history": history, "extra": extra}
 
 
 def _lookup_digits(digits, series=None, regions=None, limit=400) -> list:
@@ -504,6 +649,7 @@ input{background:#1b1f27;color:#eef1f6;border:1px solid #333;border-radius:8px;p
 <h2>🚗 AutoCheck — агент перевірки авто</h2>
 <div class=bar>
 <button onclick="j('/api/build','POST')">🛠 Побудувати базу з дампів (поряд)</button>
+<button onclick="j('/api/import','POST')">📥 Імпортувати додаткові дампи (папка import)</button>
 <button onclick="j('/api/load','POST')">⬇️ Завантажити з мережі</button>
 <button class=g onclick="j('/api/connect','POST')">🔗 Підключити до бота</button>
 <div id=prog></div>
@@ -573,6 +719,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"started": True})
         elif self.path == "/api/build":
             threading.Thread(target=_build_local, daemon=True).start()
+            self._send({"started": True})
+        elif self.path == "/api/import":
+            threading.Thread(target=_import_folder, daemon=True).start()
             self._send({"started": True})
         elif self.path == "/api/connect":
             threading.Thread(target=_poll_loop, daemon=True).start()

@@ -670,6 +670,9 @@ def report_html(payload: dict) -> str:
     gen.append(row("Операцій у реєстрі", f"<b>{len(hist)}</b>"))
     if mk:
         gen.append(row("Ринкова ціна (AutoRia)", f"<b>{mk}</b>"))
+    # Додаткові поля, залиті універсальним імпортом (юр.особа, відмітки, власники…)
+    for _ek, _ev in (res.get("extra") or {}).items():
+        gen.append(row(str(_ek).replace("_", " ").capitalize(), _rep_esc(_ev)))
 
     # Tech block — use the vehicle record (has color/body/fuel/capacity), fill gaps from history.
     car = dict(hist[0]) if hist else {}

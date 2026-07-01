@@ -772,6 +772,12 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
     mk = d.get("market")
     if mk and (mk.get("median") or mk.get("mean")):
         lines.append(f"💵 Ринок (AutoRia): <b>~${(mk.get('median') or mk.get('mean')):,}</b>".replace(",", " "))
+    ex = d.get("extra") or {}
+    if ex:
+        lines.append("━━━━━━━━━━━━")
+        lines.append("📌 <b>Додаткові дані:</b>")
+        for k, val in list(ex.items())[:8]:
+            lines.append(f"• {str(k).replace('_', ' ').capitalize()}: <b>{val}</b>")
     lines.append("\nДеталі — кнопки нижче 👇")
     return "\n".join(lines)
 
