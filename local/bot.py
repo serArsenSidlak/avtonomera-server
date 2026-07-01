@@ -1052,7 +1052,10 @@ def _report_pdf(payload: dict) -> Optional[bytes]:
     kv("Розшук", "В РОЗШУКУ" if wanted else "Не в розшуку")
     kv("Доступний для реєстрації", "ТАК" if booking.get("available") else "НІ (немає в продажу ГСЦ)")
 
-    car = hist[0] if hist else veh
+    car = dict(hist[0]) if hist else {}
+    for _k, _v in (veh or {}).items():
+        if _v:
+            car[_k] = _v
     head("ТЕХНІЧНІ ХАРАКТЕРИСТИКИ")
     if car.get("brand") or car.get("model"):
         kv("Марка та модель", f"{car.get('brand','')} {car.get('model','')}".strip())

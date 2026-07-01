@@ -640,8 +640,20 @@ def report_html(payload: dict) -> str:
         blabel = "⚪ НІ (немає в продажу ГСЦ)"
     mk = ""
     if market and (market.get("median") or market.get("mean")):
+        cur = market.get("currency") or "USD"
         val = market.get("median") or market.get("mean")
-        mk = f"~${int(val):,}".replace(",", " ")
+        mk = f"~{int(val):,} {cur}".replace(",", " ")
+        if market.get("p25") and market.get("p75"):
+            mk += (f' <span style="color:#8b95a7;font-weight:400">(діапазон '
+                   f'{int(market["p25"]):,}–{int(market["p75"]):,})</span>').replace(",", " ")
+
+    # Distinct plates that were on this car (from history)
+    plates_on, seen_p = [], set()
+    for r in hist:
+        pp = r.get("plate")
+        if pp and pp not in seen_p:
+            seen_p.add(pp)
+            plates_on.append(pp)
 
     def row(k, v):
         return f'<div class="row"><span class="k">{_rep_esc(k)}</span><span class="v">{v}</span></div>'
@@ -650,14 +662,20 @@ def report_html(payload: dict) -> str:
     gen = [row("Держномер", f'<b>{_rep_esc(plate)}</b>')]
     if vin:
         gen.append(row("VIN", f'<code>{_rep_esc(vin)}</code>'))
+    if len(plates_on) > 1:
+        gen.append(row("Номери на цьому авто", _rep_esc(", ".join(plates_on))))
     gen.append(row("Статус реєстрації", f"{remoji} {_rep_esc(rlabel)}"))
     gen.append(row("Розшук", _rep_esc(wlabel)))
     gen.append(row("Доступний для реєстрації", _rep_esc(blabel)))
+    gen.append(row("Операцій у реєстрі", f"<b>{len(hist)}</b>"))
     if mk:
         gen.append(row("Ринкова ціна (AutoRia)", f"<b>{mk}</b>"))
 
-    # Tech block
-    car = hist[0] if hist else veh
+    # Tech block — use the vehicle record (has color/body/fuel/capacity), fill gaps from history.
+    car = dict(hist[0]) if hist else {}
+    for _k, _v in (veh or {}).items():
+        if _v:
+            car[_k] = _v
     tech = []
     if car.get("brand") or car.get("model"):
         tech.append(row("Марка та модель", _rep_esc(f"{car.get('brand','')} {car.get('model','')}".strip())))
