@@ -559,24 +559,18 @@ def _import_csv(con, csv_path, src_year=None):
     return {"added": added_rows, "enriched": enriched, "dup": dup, "new_cols": added}
 
 
-def _import_folder() -> None:
-    """Універсальний імпорт: залити всі CSV/ZIP з папки 'import' поряд із програмою У НАЯВНУ базу
-    (додаємо, не перезаписуємо). Будь-які нові поля стають новими колонками автоматично."""
+def _import_paths(files, source="Імпорт") -> None:
+    """Залити список файлів (CSV/ZIP) у наявну базу з дедупом+доповненням.
+    Спільне для «папки додаткових» і для завантаженого через панель файлу."""
+    if not files:
+        _log("Немає файлів для заливки.")
+        return
     with _lock:
         if STATE["loading"]:
+            _log("Зайнято (йде інша операція) — спробуй за мить.")
             return
         STATE["loading"] = True
     try:
-        folder = IMPORT_DIR  # налаштовується у панелі (папка додаткових дампів)
-        os.makedirs(folder, exist_ok=True)
-        files = []
-        if os.path.isdir(folder):
-            for f in sorted(os.listdir(folder)):
-                if f.lower().endswith((".csv", ".zip")):  # УСІ файли (у т.ч. reestr-дампи МВС)
-                    files.append(os.path.join(folder, f))
-        if not files:
-            _log("Немає файлів. Поклади CSV/ZIP у папку 'import' поряд із програмою і натисни ще раз.")
-            return
         con = _connect()
         _ensure_schema(con)
         con.execute("PRAGMA journal_mode=OFF")
@@ -617,13 +611,45 @@ def _import_folder() -> None:
         with _lock:
             STATE["db_rows"] = _db_count()
         cols_msg = f" · нових колонок: {len(set(allcols))} ({', '.join(sorted(set(allcols)))})" if allcols else ""
-        _log(f"Імпорт завершено: ➕ додано {agg['added']} · 🔄 доповнено {agg['enriched']} · "
+        _log(f"{source} завершено: ➕ додано {agg['added']} · 🔄 доповнено {agg['enriched']} · "
              f"⏭ дублікатів {agg['dup']}{cols_msg}. Усього в базі: {STATE['db_rows']}.")
     except Exception as exc:  # noqa: BLE001
         _log(f"Помилка імпорту: {exc}")
     finally:
         with _lock:
             STATE["loading"] = False
+
+
+def _import_folder() -> None:
+    """Залити всі CSV/ZIP з налаштованої папки додаткових дампів у наявну базу."""
+    folder = IMPORT_DIR
+    try:
+        os.makedirs(folder, exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    files = ([os.path.join(folder, f) for f in sorted(os.listdir(folder))
+              if f.lower().endswith((".csv", ".zip"))] if os.path.isdir(folder) else [])
+    if not files:
+        _log(f"У папці додаткових дампів файлів нема: {folder}")
+        return
+    _import_paths(files, source="Імпорт з папки")
+
+
+def _import_uploaded(filename, data) -> None:
+    """Залити ОДИН завантажений через панель файл (CSV/ZIP) у базу (дедуп+доповнення)."""
+    import shutil
+    safe = os.path.basename(filename or "upload.dat") or "upload.dat"
+    if not safe.lower().endswith((".csv", ".zip")):
+        _log(f"Пропущено {safe}: підтримуються лише CSV/ZIP.")
+        return
+    tmpdir = tempfile.mkdtemp()
+    path = os.path.join(tmpdir, safe)
+    try:
+        with open(path, "wb") as fh:
+            fh.write(data or b"")
+        _import_paths([path], source=f"Заливка «{safe}»")
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
 
 _KNOWN_COLS = {"vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel",
@@ -778,6 +804,11 @@ input{background:#1b1f27;color:#eef1f6;border:1px solid #333;border-radius:8px;p
 <button class=g style="margin-top:8px" onclick="savePaths()">💾 Зберегти шляхи</button>
 </div>
 <div class=bar>
+<b>📎 Доповнити базу файлом</b> <span class=muted>(вибери CSV/ZIP, можна кілька)</span><br>
+<input type=file id=upl multiple accept=".csv,.zip" style="width:auto;padding:4px;margin-top:6px">
+<button class=g onclick="uploadFiles()">➕ Доповнити базу вибраним</button>
+</div>
+<div class=bar>
 <b>Перевірити вручну:</b><br>
 <input id=q placeholder="номер або VIN"><button onclick="look()">🔍 Пошук</button>
 <pre id=res style="white-space:pre-wrap;font-size:13px"></pre>
@@ -795,6 +826,13 @@ async function savePaths(){
           import_dir:document.getElementById('p_import').value.trim()};
  await fetch('/api/paths',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
  tick();}
+async function uploadFiles(){
+ const inp=document.getElementById('upl'); if(!inp.files.length){alert('Оберіть файл(и) CSV/ZIP');return;}
+ for(const f of inp.files){
+  document.getElementById('prog').textContent='Заливаю '+f.name+'… (не закривай вікно)';
+  await fetch('/api/upload',{method:'POST',headers:{'X-Filename':encodeURIComponent(f.name)},body:f});
+ }
+ inp.value=''; tick();}
 async function tick(){const s=await j('/api/state');
  document.getElementById('prog').textContent=s.progress||'';
  if(s.paths){for(const p of [['db_dir','p_db'],['dumps_dir','p_dumps'],['import_dir','p_import']]){
@@ -853,6 +891,13 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/import":
             threading.Thread(target=_import_folder, daemon=True).start()
             self._send({"started": True})
+        elif self.path == "/api/upload":
+            from urllib.parse import unquote
+            fn = unquote(self.headers.get("X-Filename", "upload.dat"))
+            ln = int(self.headers.get("Content-Length", 0) or 0)
+            data = self.rfile.read(ln) if ln else b""
+            _import_uploaded(fn, data)  # синхронно — фронт чекає завершення заливки
+            self._send({"ok": True, "name": fn})
         elif self.path == "/api/paths":
             ln = int(self.headers.get("Content-Length", 0) or 0)
             try:
