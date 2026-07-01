@@ -634,10 +634,26 @@ async def _booking_status(plate: Optional[str]) -> Optional[dict]:
     return {"available": False}
 
 
+def _plate_key(p: str) -> str:
+    """Normalized plate for comparison (upper, no separators)."""
+    import re as _re
+    return _re.sub(r"[^A-ZА-ЯІЇЄҐ0-9]", "", (p or "").upper())
+
+
 async def _show_ac(bot: Bot, chat_id: int, query: str, res: dict) -> None:
     """Долити статус бронювання й показати картку перевірки авто (статус + кнопки)."""
     plate = (res.get("vehicle") or {}).get("plate") or _full_plate(query) or query
     res["booking"] = await _booking_status(plate)
+    # Якщо шукали за НОМЕРОМ, а авто вже має ІНШИЙ актуальний номер → цей номер знято з авто.
+    vin = (res.get("vehicle") or {}).get("vin")
+    if res.get("found") and _ac_detect(query)[0] == "plate" and vin:
+        try:
+            vres = await _ac_get("vin", vin)
+            cur = (vres.get("vehicle") or {}).get("plate")
+            if cur and _plate_key(cur) != _plate_key(plate):
+                res["detached"] = {"current": cur}
+        except Exception:  # noqa: BLE001
+            pass
     await show(bot, chat_id, _fmt_ac_summary(res, query), _ac_menu_kb(res, query))
 
 
@@ -742,7 +758,14 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
         lines.append("━━━━━━━━━━━━")
         lines += specs
     lines.append("━━━━━━━━━━━━")
-    lines.append(f"{semoji} Реєстрація: <b>{slabel}</b>")
+    det = d.get("detached")
+    if det:
+        lines.append("ℹ️ Реєстрація за цим номером — <b>історична</b> (не актуальна).")
+        lines.append(f"↪️ Авто вже перереєстроване на інший номер (<b>{det['current']}</b>). "
+                     f"Номер <b>{v.get('plate') or head}</b>, схоже, зараз <b>ні за ким не закріплений</b> "
+                     f"(повернуто в МВС або на зберіганні).")
+    else:
+        lines.append(f"{semoji} Реєстрація: <b>{slabel}</b>")
     # Розшук — явно (і коли є, і коли нема)
     lines.append("🚨 Розшук: <b>В РОЗШУКУ</b> ⚠️" if wanted else "🛡 Розшук: <b>не в розшуку</b> ✅")
     lines.append(_booking_line(d))
