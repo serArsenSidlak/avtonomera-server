@@ -3,3 +3,4 @@ fastapi
 uvicorn[standard]
 asyncpg
 aiosqlite
+fpdf2

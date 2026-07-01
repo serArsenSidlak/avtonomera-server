@@ -48,8 +48,9 @@ async def guard(request: Request, call_next):
         from fastapi.responses import JSONResponse
         return JSONResponse(status_code=429, content={"detail": "Too many requests"})
 
-    # App API key (skip health/open and the secret-protected ingest/parse-job endpoints).
+    # App API key (skip health/open, public report pages, and secret-protected ingest endpoints).
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
+            and not path.startswith("/r/") \
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
                              "/collector", "/autocheck/register", "/autocheck/load-test",
                              "/autocheck/load-status", "/autocheck/load-wanted",
@@ -583,6 +584,180 @@ async def sitemap() -> Response:
     xml = ('<?xml version="1.0" encoding="UTF-8"?>'
            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + items + '</urlset>')
     return Response(content=xml, media_type="application/xml")
+
+
+# ── Vehicle report (shareable web page + PDF source) ───────────────────────────────────────────
+def _rep_esc(s) -> str:
+    return str(s if s is not None else "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _rep_date(iso) -> str:
+    if iso and len(str(iso)) >= 10 and str(iso)[4] == "-":
+        s = str(iso)
+        return f"{s[8:10]}.{s[5:7]}.{s[:4]}"
+    return str(iso) if iso else "—"
+
+
+_REP_DEREG = ("ЗНЯТ", "ВИБРАКУ", "УТИЛІЗ", "ВИВЕЗЕ", "ПРИПИНЕ", "ВКРАДЕ", "РОЗУКОМПЛЕКТ", "ЗА КОРДОН")
+
+
+def _rep_reg_status(res: dict):
+    if not res.get("found"):
+        return ("⚪", "Ніколи не реєструвався (з 2013)")
+    h = res.get("history") or []
+    last = (h[0].get("oper_name") or "").upper() if h else ""
+    if any(k in last for k in _REP_DEREG):
+        return ("⚠️", "Знятий з обліку (зараз не зареєстрований)")
+    return ("✅", "Зареєстрований")
+
+
+def _rep_car_label(r: dict) -> str:
+    parts = [r.get("brand"), r.get("model")]
+    lbl = " ".join(p for p in parts if p) or "Авто"
+    yr = r.get("make_year")
+    return f"{lbl}, {yr}" if yr else lbl
+
+
+def report_html(payload: dict) -> str:
+    """Render the shareable vehicle report page from a stored AutoCheck result."""
+    res = payload.get("res") or {}
+    query = payload.get("query") or ""
+    veh = res.get("vehicle") or {}
+    plate = veh.get("plate") or query
+    vin = veh.get("vin") or ""
+    hist = res.get("history") or []
+    if not vin and hist:
+        vin = hist[0].get("vin") or ""
+    wanted = res.get("wanted") or []
+    booking = res.get("booking") or {}
+    market = res.get("market") or {}
+    remoji, rlabel = _rep_reg_status(res)
+    wlabel = "🚨 В РОЗШУКУ" if wanted else "✅ Не в розшуку"
+    if booking.get("available"):
+        price = booking.get("price")
+        blabel = "🟢 ТАК" + (f" · {int(price):,} грн".replace(",", " ") if price else "")
+    else:
+        blabel = "⚪ НІ (немає в продажу ГСЦ)"
+    mk = ""
+    if market and (market.get("median") or market.get("mean")):
+        val = market.get("median") or market.get("mean")
+        mk = f"~${int(val):,}".replace(",", " ")
+
+    def row(k, v):
+        return f'<div class="row"><span class="k">{_rep_esc(k)}</span><span class="v">{v}</span></div>'
+
+    # General block
+    gen = [row("Держномер", f'<b>{_rep_esc(plate)}</b>')]
+    if vin:
+        gen.append(row("VIN", f'<code>{_rep_esc(vin)}</code>'))
+    gen.append(row("Статус реєстрації", f"{remoji} {_rep_esc(rlabel)}"))
+    gen.append(row("Розшук", _rep_esc(wlabel)))
+    gen.append(row("Доступний для реєстрації", _rep_esc(blabel)))
+    if mk:
+        gen.append(row("Ринкова ціна (AutoRia)", f"<b>{mk}</b>"))
+
+    # Tech block
+    car = hist[0] if hist else veh
+    tech = []
+    if car.get("brand") or car.get("model"):
+        tech.append(row("Марка та модель", _rep_esc(f"{car.get('brand','')} {car.get('model','')}".strip())))
+    if car.get("make_year"):
+        tech.append(row("Рік випуску", _rep_esc(car.get("make_year"))))
+    for k, lab in (("kind", "Тип ТЗ"), ("body", "Кузов"), ("fuel", "Паливо"),
+                   ("capacity", "Обʼєм, см³"), ("color", "Колір")):
+        if car.get(k):
+            tech.append(row(lab, _rep_esc(car.get(k))))
+
+    # History grouped by car (VIN)
+    order, groups = [], {}
+    for r in hist:
+        gid = r.get("vin") or _rep_car_label(r)
+        if gid not in groups:
+            groups[gid] = []
+            order.append(gid)
+        groups[gid].append(r)
+    hblocks = []
+    for gid in order:
+        ops = groups[gid]
+        opsh = "".join(
+            f'<div class="op"><span class="opd">{_rep_date(o.get("d_reg"))}</span>'
+            f'<span class="opn">{_rep_esc(o.get("oper_name") or "операція")}</span>'
+            + (f'<span class="opx">{_rep_esc(o.get("dep"))}</span>' if o.get("dep") else "")
+            + (f'<span class="oppl">{_rep_esc(o.get("plate"))}</span>' if o.get("plate") else "")
+            + "</div>"
+            for o in ops)
+        vinline = f'<div class="vin">🔑 <code>{_rep_esc(ops[0].get("vin"))}</code></div>' if ops[0].get("vin") else ""
+        hblocks.append(f'<div class="carblk"><div class="carh">🚗 {_rep_esc(_rep_car_label(ops[0]))}</div>{vinline}{opsh}</div>')
+    hist_html = "".join(hblocks) or '<p class="muted">Операцій у реєстрі не знайдено.</p>'
+
+    when = _rep_date((payload.get("ts") or "")[:10]) if payload.get("ts") else ""
+    tech_html = "".join(tech) or '<p class="muted">Технічних даних немає (номер не реєструвався).</p>'
+
+    return _REPORT_SHELL.replace("{{PLATE}}", _rep_esc(plate)).replace("{{WHEN}}", when) \
+        .replace("{{GEN}}", "".join(gen)).replace("{{TECH}}", tech_html).replace("{{HIST}}", hist_html) \
+        .replace("{{BOT}}", _BOT_URL)
+
+
+_REPORT_SHELL = '''<!doctype html><html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Звіт по авто {{PLATE}} — База Автономерів</title>
+<meta name="robots" content="noindex">
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#eef1f6;color:#141922;line-height:1.5;padding:16px}
+.sheet{max-width:720px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;box-shadow:0 8px 30px rgba(0,0,0,.08)}
+.top{background:linear-gradient(135deg,#12326e,#1d4ed8);color:#fff;padding:22px 20px;text-align:center}
+.brand{font-weight:900;letter-spacing:.5px;opacity:.9;font-size:13px;margin-bottom:12px}
+.plate{display:inline-flex;align-items:stretch;background:#fff;border-radius:8px;overflow:hidden;border:2px solid #0b2a5b}
+.plate .ua{background:#0057b7;color:#ffd700;font-weight:900;font-size:12px;display:flex;align-items:center;padding:0 7px}
+.plate .pn{color:#0b0e14;font-weight:900;font-size:26px;letter-spacing:2px;padding:8px 14px}
+.top .when{opacity:.8;font-size:12px;margin-top:12px}
+h2{font-size:15px;font-weight:800;color:#12326e;margin:0;padding:16px 20px 6px;text-transform:uppercase;letter-spacing:.4px}
+.sec{padding:0 20px 8px}
+.row{display:flex;justify-content:space-between;gap:14px;padding:9px 0;border-bottom:1px solid #eef1f6;font-size:14.5px}
+.row .k{color:#6b7585}.row .v{text-align:right;font-weight:600}
+code{background:#f1f4f9;border-radius:5px;padding:1px 6px;font-size:13px}
+.carblk{border:1px solid #e6ebf3;border-radius:12px;margin:10px 20px;padding:12px 14px;background:#fafbfe}
+.carh{font-weight:800;color:#12326e}
+.vin{margin:3px 0 8px;color:#6b7585;font-size:13px}
+.op{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline;padding:6px 0;border-top:1px dashed #e6ebf3;font-size:13.5px}
+.op .opd{color:#1d4ed8;font-weight:700;min-width:82px}
+.op .opn{flex:1;min-width:150px}
+.op .opx{color:#6b7585;font-size:12px}
+.op .oppl{background:#eef4ff;color:#12326e;border-radius:5px;padding:1px 6px;font-weight:700;font-size:12px}
+.muted{color:#8b95a7;padding:8px 20px 16px;font-size:14px}
+.cta{display:block;text-align:center;background:#1d4ed8;color:#fff;font-weight:800;padding:15px;margin:18px 20px 6px;border-radius:12px;text-decoration:none}
+.foot{padding:14px 20px 22px;color:#8b95a7;font-size:12px;text-align:center}
+@media print{body{background:#fff;padding:0}.sheet{box-shadow:none}.cta{display:none}}
+</style></head><body>
+<div class="sheet">
+<div class="top">
+<div class="brand">🇺🇦 БАЗА АВТОНОМЕРІВ УКРАЇНИ</div>
+<div class="plate"><span class="ua">UA</span><span class="pn">{{PLATE}}</span></div>
+<div class="when">Звіт сформовано {{WHEN}}</div>
+</div>
+<h2>Загальні дані</h2><div class="sec">{{GEN}}</div>
+<h2>Технічні характеристики</h2><div class="sec">{{TECH}}</div>
+<h2>Історія (реєстр МВС)</h2>{{HIST}}
+<a class="cta" href="{{BOT}}">Перевірити своє авто в Telegram →</a>
+<div class="foot">Дані з відкритого реєстру МВС (data.gov.ua), деперсоналізовано. Без ПІБ власників.<br>База Автономерів України · @nomer_na_avto_bot</div>
+</div>
+</body></html>'''
+
+
+@app.get("/r/{token}", response_class=HTMLResponse)
+async def vehicle_report(token: str) -> HTMLResponse:
+    """Public shareable vehicle report page (data stored by the bot under meta rep_<token>)."""
+    import json as _json
+    raw = await db.get_meta(f"rep_{token}")
+    if not raw:
+        return HTMLResponse("<h3 style='font-family:sans-serif;padding:40px'>Звіт не знайдено або застарів.</h3>",
+                            status_code=404)
+    try:
+        payload = _json.loads(raw)
+    except Exception:  # noqa: BLE001
+        return HTMLResponse("Помилка звіту", status_code=500)
+    return HTMLResponse(report_html(payload))
 
 
 @app.get("/stats")

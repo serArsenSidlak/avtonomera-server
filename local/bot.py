@@ -841,6 +841,9 @@ def _ac_menu_kb(d: dict, query: str) -> InlineKeyboardMarkup:
         g += 1
     if g:
         groups.append(g)
+    if found:  # єдиний гарний звіт (веб-сторінка + PDF), можна поділитись
+        b.button(text="📄 Повний звіт (лінк + PDF)", callback_data=f"ac:rep:{primary}")
+        groups.append(1)
     # Зовнішні офіційні перевірки (відкривають сайт у натиску — як просив Артур).
     ext = 0
     b.button(text="🚗 AutoRia", url=f"https://auto.ria.com/uk/search/?text={quote(q)}")
@@ -975,6 +978,167 @@ def _ac_vin_kb(vin: str) -> InlineKeyboardMarkup:
     return b.as_markup()
 
 
+_REPORT_BASE = "https://34.123.136.171.nip.io"
+
+
+def _report_pdf(payload: dict) -> Optional[bytes]:
+    """Build a clean A4 PDF of the report (fpdf2 + bundled DejaVu for Cyrillic). None on failure."""
+    try:
+        from fpdf import FPDF
+    except Exception:  # noqa: BLE001
+        return None
+    import os
+    fp = os.path.join(os.path.dirname(__file__), "fonts", "DejaVuSans.ttf")
+    if not os.path.exists(fp):
+        for c in ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                  "/usr/share/fonts/dejavu/DejaVuSans.ttf"):
+            if os.path.exists(c):
+                fp = c
+                break
+        else:
+            return None
+    res = payload.get("res") or {}
+    veh = res.get("vehicle") or {}
+    hist = _dedup_ops(res.get("history") or [])
+    plate = veh.get("plate") or payload.get("query") or ""
+    vin = veh.get("vin") or (hist[0].get("vin") if hist else "") or ""
+    _, _emoji, rlabel = _reg_status(res)
+    wanted = res.get("wanted") or []
+    booking = res.get("booking") or {}
+
+    pdf = FPDF(format="A4")
+    pdf.set_auto_page_break(True, margin=15)
+    pdf.add_page()
+    pdf.add_font("dv", "", fp)
+
+    L = pdf.l_margin
+
+    def head(txt: str) -> None:
+        pdf.ln(3)
+        pdf.set_x(L)
+        pdf.set_font("dv", "", 13)
+        pdf.set_text_color(18, 50, 110)
+        pdf.multi_cell(0, 8, txt)
+        pdf.set_text_color(20, 25, 34)
+
+    def kv(k: str, v) -> None:
+        pdf.set_x(L)
+        pdf.set_font("dv", "", 10.5)
+        pdf.set_text_color(107, 117, 133)
+        pdf.cell(58, 7, k)
+        pdf.set_text_color(20, 25, 34)
+        pdf.multi_cell(0, 7, str(v))
+
+    def line(txt: str, size: float, color=(20, 25, 34)) -> None:
+        pdf.set_x(L)
+        pdf.set_font("dv", "", size)
+        pdf.set_text_color(*color)
+        pdf.multi_cell(0, 6 if size < 11 else 7, txt)
+
+    pdf.set_x(L)
+    pdf.set_font("dv", "", 20)
+    pdf.set_text_color(18, 50, 110)
+    pdf.multi_cell(0, 12, f"Звіт по авто  {plate}")
+    line("База Автономерів України · дані відкритого реєстру МВС (data.gov.ua), деперсоналізовано", 9, (120, 120, 120))
+
+    head("ЗАГАЛЬНІ ДАНІ")
+    if vin:
+        kv("VIN", vin)
+    kv("Статус реєстрації", rlabel)
+    kv("Розшук", "В РОЗШУКУ" if wanted else "Не в розшуку")
+    kv("Доступний для реєстрації", "ТАК" if booking.get("available") else "НІ (немає в продажу ГСЦ)")
+
+    car = hist[0] if hist else veh
+    head("ТЕХНІЧНІ ХАРАКТЕРИСТИКИ")
+    if car.get("brand") or car.get("model"):
+        kv("Марка та модель", f"{car.get('brand','')} {car.get('model','')}".strip())
+    if car.get("make_year"):
+        kv("Рік випуску", car.get("make_year"))
+    for k, lab in (("kind", "Тип"), ("body", "Кузов"), ("fuel", "Паливо"),
+                   ("capacity", "Обʼєм, см³"), ("color", "Колір")):
+        if car.get(k):
+            kv(lab, car.get(k))
+
+    head("ІСТОРІЯ (РЕЄСТР МВС)")
+    if not hist:
+        line("Операцій у реєстрі не знайдено.", 10)
+    else:
+        order, groups = [], {}
+        for r in hist:
+            gid = r.get("vin") or _car_label(r)
+            if gid not in groups:
+                groups[gid] = []
+                order.append(gid)
+            groups[gid].append(r)
+        shown = 0
+        for gid in order:
+            ops = groups[gid]
+            pdf.ln(2)
+            line(f"Авто: {_car_label(ops[0])}", 11, (18, 50, 110))
+            for o in ops:
+                if shown >= 45:
+                    break
+                d = _fmt_date(o.get("d_reg"))
+                op = (o.get("oper_name") or "операція").strip()
+                extra = " · ".join(x for x in (o.get("plate"), o.get("dep")) if x)
+                line(f"  {d} — {op}" + (f"  ({extra})" if extra else ""), 9.5)
+                shown += 1
+    try:
+        out = pdf.output()
+        return bytes(out) if out else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _make_report(bot: Bot, chat_id: int, key: str) -> None:
+    """Build a shareable vehicle report: store the lookup result, give a web link (+ PDF file)."""
+    from urllib.parse import quote
+    import uuid, json as _json, datetime as _dt
+
+    param, val = _ac_detect(key)
+    res = await _ac_get(param, val)
+    if res.get("offline"):
+        await show(bot, chat_id, "⏳ База перевірки авто зараз недоступна (агент на ПК вимкнено). Спробуй пізніше.",
+                   kb_back([("⬅️ Назад", f"ac:sum:{key}")]))
+        return
+    plate = (res.get("vehicle") or {}).get("plate") or _full_plate(key) or key
+    try:
+        res["booking"] = await _booking_status(plate)
+    except Exception:  # noqa: BLE001
+        pass
+    token = uuid.uuid4().hex[:12]
+    payload = {"res": res, "query": key, "ts": _dt.datetime.now(_dt.timezone.utc).isoformat()}
+    try:
+        await db.set_meta(f"rep_{token}", _json.dumps(payload, ensure_ascii=False))
+    except Exception as exc:  # noqa: BLE001
+        print(f"[report] store failed: {exc!r}")
+        await show(bot, chat_id, "Не вдалося сформувати звіт. Спробуй ще раз.",
+                   kb_back([("⬅️ Назад", f"ac:sum:{key}")]))
+        return
+    link = f"{_REPORT_BASE}/r/{token}"
+    # Try to attach a real PDF file (best-effort; the web link always works).
+    try:
+        pdf = _report_pdf(payload)
+        if pdf:
+            from aiogram.types import BufferedInputFile
+            await bot.send_document(chat_id, BufferedInputFile(pdf, filename=f"zvit_{plate or 'auto'}.pdf"),
+                                    caption=f"📄 Звіт по авто {plate}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[report] pdf failed: {exc!r}")
+    b = InlineKeyboardBuilder()
+    b.button(text="🌐 Відкрити звіт", url=link)
+    b.button(text="📤 Поділитися", url=f"https://t.me/share/url?url={quote(link)}")
+    b.button(text="⬅️ Назад", callback_data=f"ac:sum:{key}")
+    b.button(text="⬅️ Меню", callback_data="menu")
+    b.adjust(1, 1, 2)
+    await show(bot, chat_id,
+              f"📄 <b>Повний звіт готовий</b>\n\n🔗 {link}\n\n"
+              "• Відкрий — гарна сторінка з усіма даними (історія номера й авто, розшук, ціна)\n"
+              "• Можна <b>поділитися</b> посиланням\n"
+              "• PDF надіслав окремим файлом вище (якщо не прийшов — відкрий лінк → Друк → «Зберегти як PDF»)",
+              b.as_markup())
+
+
 @dp.callback_query(F.data.startswith("ac:"))
 async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
     """Reveal one AutoCheck section on tap: reg / roz / plate-hist / vin-hist / back to summary."""
@@ -992,6 +1156,9 @@ async def cb_acsec(cq: CallbackQuery, state: FSMContext) -> None:
     if sec == "vin":
         res = await _ac_get("vin", key)
         await show(cq.message.bot, cq.message.chat.id, _fmt_ac_history(res, "vin", key), _ac_vin_kb(key))
+        return
+    if sec == "rep":
+        await _make_report(cq.message.bot, cq.message.chat.id, key)
         return
     # reg / roz / sum — повний lookup за ключем (поточне авто + розшук)
     param, val = _ac_detect(key)
