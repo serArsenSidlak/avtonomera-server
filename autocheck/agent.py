@@ -148,6 +148,19 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
     con.commit()
 
 
+def _reset_db_file() -> None:
+    """Видалити фізичний файл БД (і журнали) перед чистим білдом — щоб пошкоджений
+    файл («database disk image is malformed») не блокував побудову (DROP TABLE на битому
+    файлі падає, а видалення файлу — ні)."""
+    for suffix in ("", "-wal", "-shm", "-journal"):
+        p = DB_PATH + suffix
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _db_count() -> int:
     try:
         con = _connect()
@@ -210,10 +223,8 @@ def _load_all() -> None:
         STATE["loading"] = True
     ins = f"INSERT INTO vehicle_ops ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
     try:
+        _reset_db_file()  # чистий старт (і від пошкодженого файлу теж)
         con = _connect()
-        con.execute("DROP TABLE IF EXISTS vehicle_ops")
-        con.execute("DROP INDEX IF EXISTS ix_plate")
-        con.execute("DROP INDEX IF EXISTS ix_vin")
         _ensure_schema(con)
         con.execute("PRAGMA journal_mode=OFF")
         con.execute("PRAGMA synchronous=OFF")
@@ -342,8 +353,8 @@ def _build_local() -> None:
             _log("Дампів поряд не знайдено. Поклади reestrTZ*.zip у папку з цим файлом.")
             return
         ins = f"INSERT INTO vehicle_ops ({','.join(COLUMNS)}) VALUES ({','.join('?' * len(COLUMNS))})"
+        _reset_db_file()  # чистий старт (і від пошкодженого файлу теж)
         con = _connect()
-        con.execute("DROP TABLE IF EXISTS vehicle_ops")
         _ensure_schema(con)
         con.execute("PRAGMA journal_mode=OFF")
         con.execute("PRAGMA synchronous=OFF")
