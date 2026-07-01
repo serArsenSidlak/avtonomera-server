@@ -432,8 +432,16 @@ def _import_csv(con, csv_path, src_year=None):
                 con.execute(f'ALTER TABLE vehicle_ops ADD COLUMN "{c}" TEXT')
                 existing.add(c)
         con.execute("CREATE INDEX IF NOT EXISTS ix_hash ON vehicle_ops(row_hash)")
+        # Формат 2026: операція в об'єднаній колонці «код - назва» замість окремого OPER_NAME.
+        comb_h = next((hh for hh in (r.fieldnames or []) if "OPERAS" in (hh or "").upper()), None)
+        derive_oper = bool(comb_h) and "oper_name" not in colmap.values()
+        if derive_oper:
+            colmap.pop(comb_h, None)  # не зберігаємо об'єднану колонку сирою — розбираємо нижче
+        base_cols = list(colmap.values()) + ["letters_start", "digits", "letters_end", "src_year", "row_hash"]
+        if derive_oper:
+            base_cols += ["oper_name", "oper_code"]
         cols = []
-        for c in list(colmap.values()) + ["letters_start", "digits", "letters_end", "src_year", "row_hash"]:
+        for c in base_cols:
             if c not in cols:
                 cols.append(c)
         ins = f'INSERT INTO vehicle_ops ({",".join(chr(34) + c + chr(34) for c in cols)}) ' \
@@ -451,6 +459,15 @@ def _import_csv(con, csv_path, src_year=None):
                 elif col == "d_reg":
                     v = _iso(v)
                 vals[col] = v or None
+            if derive_oper and not vals.get("oper_name"):
+                comb = (row.get(comb_h) or "").strip()
+                if comb:
+                    m = re.match(r"\s*(\d+)\s*-\s*(.+)", comb)  # «код-назва» або «код - назва»
+                    if m:
+                        vals["oper_code"] = _int(m.group(1))
+                        vals["oper_name"] = m.group(2).strip()
+                    else:
+                        vals["oper_name"] = comb
             ls, dg, le = _plate_parts(vals.get("plate")) if vals.get("plate") else (None, None, None)
             h = _row_hash(vals.get("vin"), vals.get("plate"), vals.get("d_reg"),
                           vals.get("oper_name"), vals.get("dep"))
@@ -485,11 +502,10 @@ def _import_folder() -> None:
         base = _dumps_dir()
         folder = os.path.join(base, "import")
         files = []
-        for d in (folder, base):
-            if os.path.isdir(d):
-                for f in sorted(os.listdir(d)):
-                    if f.lower().endswith((".csv", ".zip")) and "reestr" not in f.lower():
-                        files.append(os.path.join(d, f))
+        if os.path.isdir(folder):
+            for f in sorted(os.listdir(folder)):
+                if f.lower().endswith((".csv", ".zip")):  # УСІ файли з import (у т.ч. reestr-дампи МВС)
+                    files.append(os.path.join(folder, f))
         if not files:
             _log("Немає файлів. Поклади CSV/ZIP у папку 'import' поряд із програмою і натисни ще раз.")
             return
