@@ -79,7 +79,64 @@ def _appdir() -> str:
     return d
 
 
-DB_PATH = os.path.join(_appdir(), "autocheck.db")
+DB_PATH = os.path.join(_appdir(), "autocheck.db")  # default; overridden by saved config
+
+
+def _base_dir() -> str:
+    return os.path.dirname(os.path.abspath(
+        sys.executable if getattr(sys, "frozen", False) else __file__))
+
+
+def _cfg_file() -> str:
+    return os.path.join(_base_dir(), "autocheck_paths.json")
+
+
+def _default_paths() -> dict:
+    b = _base_dir()
+    return {"db_dir": _appdir(), "dumps_dir": b, "import_dir": os.path.join(b, "import")}
+
+
+def _load_paths() -> dict:
+    d = _default_paths()
+    try:
+        if os.path.exists(_cfg_file()):
+            with open(_cfg_file(), encoding="utf-8") as f:
+                d.update({k: v for k, v in json.load(f).items() if v})
+    except Exception:  # noqa: BLE001
+        pass
+    return d
+
+
+DUMPS_DIR = _default_paths()["dumps_dir"]
+IMPORT_DIR = _default_paths()["import_dir"]
+
+
+def _apply_paths(d: dict = None) -> dict:
+    """Застосувати шляхи (папка бази / основних дампів / додаткових) до глобальних змінних."""
+    global DB_PATH, DUMPS_DIR, IMPORT_DIR
+    d = d or _load_paths()
+    try:
+        os.makedirs(d["db_dir"], exist_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
+    DB_PATH = os.path.join(d["db_dir"], "autocheck.db")
+    DUMPS_DIR = d["dumps_dir"]
+    IMPORT_DIR = d["import_dir"]
+    return d
+
+
+def _save_paths(new: dict) -> dict:
+    d = _load_paths()
+    d.update({k: v for k, v in (new or {}).items() if v})
+    try:
+        with open(_cfg_file(), "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        pass
+    return _apply_paths(d)
+
+
+_apply_paths()  # застосувати збережені шляхи на старті
 
 _lock = threading.Lock()
 STATE = {
@@ -282,7 +339,7 @@ def _load_all() -> None:
 
 
 def _dumps_dir() -> str:
-    return os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+    return DUMPS_DIR  # налаштовується у панелі (папка основних дампів)
 
 
 def _iso2(v):
@@ -510,12 +567,12 @@ def _import_folder() -> None:
             return
         STATE["loading"] = True
     try:
-        base = _dumps_dir()
-        folder = os.path.join(base, "import")
+        folder = IMPORT_DIR  # налаштовується у панелі (папка додаткових дампів)
+        os.makedirs(folder, exist_ok=True)
         files = []
         if os.path.isdir(folder):
             for f in sorted(os.listdir(folder)):
-                if f.lower().endswith((".csv", ".zip")):  # УСІ файли з import (у т.ч. reestr-дампи МВС)
+                if f.lower().endswith((".csv", ".zip")):  # УСІ файли (у т.ч. reestr-дампи МВС)
                     files.append(os.path.join(folder, f))
         if not files:
             _log("Немає файлів. Поклади CSV/ZIP у папку 'import' поряд із програмою і натисни ще раз.")
@@ -706,12 +763,19 @@ input{background:#1b1f27;color:#eef1f6;border:1px solid #333;border-radius:8px;p
 </head><body>
 <h2>🚗 AutoCheck — агент перевірки авто</h2>
 <div class=bar>
-<button onclick="j('/api/build','POST')">🛠 Побудувати базу з дампів (поряд)</button>
-<button onclick="j('/api/import','POST')">📥 Імпортувати додаткові дампи (папка import)</button>
+<button onclick="j('/api/build','POST')">🛠 Побудувати базу з осн. дампів</button>
+<button onclick="j('/api/import','POST')">📥 Імпортувати додаткові дампи</button>
 <button onclick="j('/api/load','POST')">⬇️ Завантажити з мережі</button>
 <button class=g onclick="j('/api/connect','POST')">🔗 Підключити до бота</button>
 <div id=prog></div>
 <div id=stat class=muted style="margin-top:8px"></div>
+</div>
+<div class=bar>
+<b>⚙️ Шляхи</b> <span class=muted>(де база й де брати дампи)</span><br>
+<div style="margin-top:6px">📁 Папка бази: <input id=p_db style="width:360px"></div>
+<div style="margin-top:6px">📁 Основні дампи (reestr МВС): <input id=p_dumps style="width:360px"></div>
+<div style="margin-top:6px">📁 Додаткові дампи (для імпорту): <input id=p_import style="width:360px"></div>
+<button class=g style="margin-top:8px" onclick="savePaths()">💾 Зберегти шляхи</button>
 </div>
 <div class=bar>
 <b>Перевірити вручну:</b><br>
@@ -725,8 +789,16 @@ async function look(){const v=document.getElementById('q').value.trim();if(!v)re
  const isVin=/[0-9]/.test(v)&&v.length>=10&&/[A-Z]/i.test(v)&&!/^[А-Яа-яІЇЄҐ]/.test(v);
  const r=await j('/lookup?'+(isVin?'vin=':'plate=')+encodeURIComponent(v));
  document.getElementById('res').textContent=JSON.stringify(r,null,2);}
+async function savePaths(){
+ const b={db_dir:document.getElementById('p_db').value.trim(),
+          dumps_dir:document.getElementById('p_dumps').value.trim(),
+          import_dir:document.getElementById('p_import').value.trim()};
+ await fetch('/api/paths',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+ tick();}
 async function tick(){const s=await j('/api/state');
  document.getElementById('prog').textContent=s.progress||'';
+ if(s.paths){for(const p of [['db_dir','p_db'],['dumps_dir','p_dumps'],['import_dir','p_import']]){
+  const el=document.getElementById(p[1]); if(el&&document.activeElement!==el) el.value=s.paths[p[0]]||'';}}
  document.getElementById('stat').innerHTML='База: <b>'+(s.db_rows||0)+'</b> рядків. '+
   (s.connected?('✅ Підключено до бота · відповів на запитів: '+(s.answered||0)):
    (s.polling?'Підключаюсь…':'Не підключено.'));
@@ -757,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send({"years": STATE["years"], "db_rows": STATE["db_rows"],
                             "loading": STATE["loading"], "progress": STATE["progress"],
                             "polling": STATE["polling"], "connected": STATE["connected"],
-                            "answered": STATE["answered"]})
+                            "answered": STATE["answered"], "paths": _load_paths()})
         elif self.path.startswith("/lookup"):
             # secret required only for remote (bot) calls; local panel calls without it are allowed.
             from urllib.parse import urlparse, parse_qs
@@ -781,6 +853,17 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/api/import":
             threading.Thread(target=_import_folder, daemon=True).start()
             self._send({"started": True})
+        elif self.path == "/api/paths":
+            ln = int(self.headers.get("Content-Length", 0) or 0)
+            try:
+                body = json.loads(self.rfile.read(ln).decode("utf-8")) if ln else {}
+            except Exception:  # noqa: BLE001
+                body = {}
+            applied = _save_paths(body)
+            with _lock:
+                STATE["db_rows"] = _db_count()
+            _log("Шляхи збережено. База: " + applied["db_dir"])
+            self._send({"ok": True, "paths": applied})
         elif self.path == "/api/connect":
             threading.Thread(target=_poll_loop, daemon=True).start()
             self._send({"started": True})
