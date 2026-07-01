@@ -112,10 +112,13 @@ def _int(v: str):
 
 
 def _iso(v: str):
+    """dd.mm.yyyy АБО dd.mm.yy (2-значний рік у дампах 2024-2026) → ISO YYYY-MM-DD."""
     v = (v or "").strip()
-    m = re.match(r"(\d{2})\.(\d{2})\.(\d{4})", v)
+    m = re.match(r"(\d{2})\.(\d{2})\.(\d{2,4})", v)
     if m:
-        return f"{m.group(3)}-{m.group(2)}-{m.group(1)}"
+        y = m.group(3)
+        y = "20" + y if len(y) == 2 else y
+        return f"{y}-{m.group(2)}-{m.group(1)}"
     if re.match(r"\d{4}-\d{2}-\d{2}", v):
         return v[:10]
     return None
