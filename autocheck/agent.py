@@ -50,7 +50,15 @@ _LAT2CYR = str.maketrans({"A": "А", "B": "В", "C": "С", "E": "Е", "H": "Н",
 COLUMNS = ["vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "purpose",
            "fuel", "capacity", "own_weight", "total_weight", "d_reg", "oper_code", "oper_name",
            "dep_code", "dep", "reg_addr_koatuu", "person", "src_year",
-           "letters_start", "digits", "letters_end"]  # розібраний номер → пошук по комбінації/серії
+           "letters_start", "digits", "letters_end",  # розібраний номер → пошук по комбінації/серії
+           "row_hash"]  # хеш операції (VIN+номер+дата+операція+ТСЦ) → дедуп/доповнення при імпорті
+
+
+def _row_hash(vin, plate, d_reg, oper_name, dep):
+    """Стабільний хеш операції — щоб не дублювати той самий запис при повторному заливі."""
+    import hashlib
+    key = "|".join(str(x if x is not None else "") for x in (vin, plate, d_reg, oper_name, dep))
+    return hashlib.md5(key.encode("utf-8")).hexdigest()
 _PLATE_RE = re.compile(r"^([А-ЯІЇЄҐ]{1,3})(\d{2,4})([А-ЯІЇЄҐ]{0,3})$")
 
 
@@ -136,7 +144,7 @@ def _ensure_schema(con: sqlite3.Connection) -> None:
         "make_year INTEGER, color TEXT, kind TEXT, body TEXT, purpose TEXT, fuel TEXT, "
         "capacity INTEGER, own_weight INTEGER, total_weight INTEGER, d_reg TEXT, oper_code INTEGER, "
         "oper_name TEXT, dep_code INTEGER, dep TEXT, reg_addr_koatuu TEXT, person TEXT, src_year INTEGER, "
-        "letters_start TEXT, digits TEXT, letters_end TEXT)")
+        "letters_start TEXT, digits TEXT, letters_end TEXT, row_hash TEXT)")
     con.commit()
 
 
@@ -188,6 +196,9 @@ def _rows(csv_path: str, year: int):
                 (row.get("REG_ADDR_KOATUU") or "").strip() or None,
                 (row.get("PERSON") or "").strip() or None,
                 year, ls, dg, le,
+                _row_hash((row.get("VIN") or "").strip() or None, plate, _iso(row.get("D_REG")),
+                          (row.get("OPER_NAME") or "").strip() or None,
+                          (row.get("DEP") or "").strip() or None),
             )
 
 
@@ -246,6 +257,7 @@ def _load_all() -> None:
         con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_hash ON vehicle_ops(row_hash)")
         con.commit()
         con.close()
         with _lock:
@@ -297,7 +309,9 @@ def _record_flex(row, src_year):
             _int(row.get("CAPACITY")), _int(row.get("OWN_WEIGHT")), _int(row.get("TOTAL_WEIGHT")),
             _iso2(row.get("D_REG")), opc, opn, _int(row.get("DEP_CODE")),
             (row.get("DEP") or "").strip() or None, (row.get("REG_ADDR_KOATUU") or "").strip() or None,
-            (row.get("PERSON") or "").strip() or None, src_year, ls, dg, le)
+            (row.get("PERSON") or "").strip() or None, src_year, ls, dg, le,
+            _row_hash((row.get("VIN") or "").strip() or None, plate, _iso2(row.get("D_REG")), opn,
+                      (row.get("DEP") or "").strip() or None))
 
 
 def _find_local_dumps():
@@ -363,6 +377,7 @@ def _build_local() -> None:
         con.execute("CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)")
         con.execute("CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)")
+        con.execute("CREATE INDEX IF NOT EXISTS ix_hash ON vehicle_ops(row_hash)")
         con.commit()
         con.close()
         with _lock:
@@ -412,17 +427,19 @@ def _import_csv(con, csv_path, src_year=None):
                 con.execute(f'ALTER TABLE vehicle_ops ADD COLUMN "{col}" TEXT')
                 existing.add(col)
                 added.append(col)
-        for c in ("letters_start", "digits", "letters_end", "src_year"):
+        for c in ("letters_start", "digits", "letters_end", "src_year", "row_hash"):
             if c not in existing:
                 con.execute(f'ALTER TABLE vehicle_ops ADD COLUMN "{c}" TEXT')
                 existing.add(c)
+        con.execute("CREATE INDEX IF NOT EXISTS ix_hash ON vehicle_ops(row_hash)")
         cols = []
-        for c in list(colmap.values()) + ["letters_start", "digits", "letters_end", "src_year"]:
+        for c in list(colmap.values()) + ["letters_start", "digits", "letters_end", "src_year", "row_hash"]:
             if c not in cols:
                 cols.append(c)
         ins = f'INSERT INTO vehicle_ops ({",".join(chr(34) + c + chr(34) for c in cols)}) ' \
               f'VALUES ({",".join("?" * len(cols))})'
-        n, batch = 0, []
+        cur = con.cursor()
+        added_rows = enriched = dup = 0
         for row in r:
             vals = {}
             for h, col in colmap.items():
@@ -435,17 +452,26 @@ def _import_csv(con, csv_path, src_year=None):
                     v = _iso(v)
                 vals[col] = v or None
             ls, dg, le = _plate_parts(vals.get("plate")) if vals.get("plate") else (None, None, None)
-            vals.update(letters_start=ls, digits=dg, letters_end=le, src_year=src_year)
-            batch.append(tuple(vals.get(c) for c in cols))
-            if len(batch) >= 20000:
-                con.executemany(ins, batch)
-                n += len(batch)
-                batch = []
-        if batch:
-            con.executemany(ins, batch)
-            n += len(batch)
+            h = _row_hash(vals.get("vin"), vals.get("plate"), vals.get("d_reg"),
+                          vals.get("oper_name"), vals.get("dep"))
+            vals.update(letters_start=ls, digits=dg, letters_end=le, src_year=src_year, row_hash=h)
+            ex = cur.execute("SELECT * FROM vehicle_ops WHERE row_hash=? LIMIT 1", (h,)).fetchone()
+            if ex is None:  # нова операція → додаємо
+                cur.execute(ins, tuple(vals.get(c) for c in cols))
+                added_rows += 1
+            else:  # така операція вже є → доповнюємо порожні поля (не затираємо заповнені)
+                exd = dict(ex)
+                upd = {c: vals[c] for c in cols
+                       if c != "row_hash" and exd.get(c) in (None, "") and vals.get(c) not in (None, "")}
+                if upd:
+                    setc = ", ".join(f'"{c}"=?' for c in upd)
+                    cur.execute(f"UPDATE vehicle_ops SET {setc} WHERE row_hash=?",
+                                tuple(upd.values()) + (h,))
+                    enriched += 1
+                else:
+                    dup += 1
     con.commit()
-    return n, added
+    return {"added": added_rows, "enriched": enriched, "dup": dup, "new_cols": added}
 
 
 def _import_folder() -> None:
@@ -471,7 +497,16 @@ def _import_folder() -> None:
         _ensure_schema(con)
         con.execute("PRAGMA journal_mode=OFF")
         con.execute("PRAGMA synchronous=OFF")
-        total, allcols = 0, []
+        agg = {"added": 0, "enriched": 0, "dup": 0}
+        allcols = []
+
+        def _apply(res, label):
+            for k in ("added", "enriched", "dup"):
+                agg[k] += res.get(k, 0)
+            allcols.extend(res.get("new_cols") or [])
+            nc = f" · нові поля: {', '.join(res['new_cols'])}" if res.get("new_cols") else ""
+            _log(f"{label}: ➕{res['added']} 🔄{res['enriched']} ⏭{res['dup']}{nc}")
+
         for path in files:
             ym = re.search(r"(20\d{2})", os.path.basename(path))
             sy = int(ym.group(1)) if ym else None
@@ -482,28 +517,24 @@ def _import_folder() -> None:
                             names = _zip_data_names(zf)
                             zf.extractall(tmp)
                         for nm in names:
-                            n, added = _import_csv(con, os.path.join(tmp, nm), sy)
-                            total += n
-                            allcols += added
-                            _log(f"{os.path.basename(path)}: +{n}" + (f" · нові поля: {', '.join(added)}" if added else ""))
+                            _apply(_import_csv(con, os.path.join(tmp, nm), sy), os.path.basename(path))
                 else:
-                    n, added = _import_csv(con, path, sy)
-                    total += n
-                    allcols += added
-                    _log(f"{os.path.basename(path)}: +{n}" + (f" · нові поля: {', '.join(added)}" if added else ""))
+                    _apply(_import_csv(con, path, sy), os.path.basename(path))
             except Exception as exc:  # noqa: BLE001
                 _log(f"{os.path.basename(path)}: помилка ({exc}) ❌")
         for idx in ("CREATE INDEX IF NOT EXISTS ix_plate ON vehicle_ops(plate)",
                     "CREATE INDEX IF NOT EXISTS ix_vin ON vehicle_ops(vin)",
                     "CREATE INDEX IF NOT EXISTS ix_digits ON vehicle_ops(digits)",
-                    "CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)"):
+                    "CREATE INDEX IF NOT EXISTS ix_le ON vehicle_ops(letters_end)",
+                    "CREATE INDEX IF NOT EXISTS ix_hash ON vehicle_ops(row_hash)"):
             con.execute(idx)
         con.commit()
         con.close()
         with _lock:
             STATE["db_rows"] = _db_count()
-        cols_msg = f" · додано колонок: {len(set(allcols))} ({', '.join(sorted(set(allcols)))})" if allcols else ""
-        _log(f"Імпорт завершено: +{total} рядків{cols_msg}. Усього в базі: {STATE['db_rows']}.")
+        cols_msg = f" · нових колонок: {len(set(allcols))} ({', '.join(sorted(set(allcols)))})" if allcols else ""
+        _log(f"Імпорт завершено: ➕ додано {agg['added']} · 🔄 доповнено {agg['enriched']} · "
+             f"⏭ дублікатів {agg['dup']}{cols_msg}. Усього в базі: {STATE['db_rows']}.")
     except Exception as exc:  # noqa: BLE001
         _log(f"Помилка імпорту: {exc}")
     finally:
@@ -514,7 +545,7 @@ def _import_folder() -> None:
 _KNOWN_COLS = {"vin", "plate", "brand", "model", "make_year", "color", "kind", "body", "fuel",
                "capacity", "purpose", "own_weight", "total_weight", "d_reg", "oper_code", "oper_name",
                "dep_code", "dep", "reg_addr_koatuu", "person", "src_year", "letters_start", "digits",
-               "letters_end"}
+               "letters_end", "row_hash"}
 
 
 def _lookup(plate=None, vin=None) -> dict:
