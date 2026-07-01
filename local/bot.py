@@ -711,21 +711,45 @@ def _fmt_ac_summary(d: dict, query: str) -> str:
         lines.append("\nОбери, що показати 👇")
         return "\n".join(lines)
     v = d.get("vehicle") or {}
+
+    def _nice(x):
+        s = str(x or "").strip()
+        return s.capitalize() if s.isupper() else s
+
     title = f"{v.get('brand') or ''} {v.get('model') or ''}".strip() or "Транспортний засіб"
     yr = f", {v['make_year']}" if v.get("make_year") else ""
     lines = []
     if wanted:
-        lines.append("🚨 <b>УВАГА: авто в розшуку!</b> Деталі — кнопка «🚨 Розшук».\n")
+        lines.append("🚨 <b>УВАГА: авто в розшуку!</b>\n")
     lines.append(f"🚗 <b>{title}</b>{yr}")
     if v.get("plate"):
         lines.append(f"🔢 {v['plate']}" + (f"  ·  📍 {region}" if region else ""))
+    if v.get("vin"):
+        lines.append(f"🔑 <code>{v['vin']}</code>")
+    # Характеристики — одразу (як просив Артур)
+    specs = []
+    if v.get("kind"):
+        specs.append(f"🚙 Тип: {_nice(v['kind'])}")
+    if v.get("body"):
+        specs.append(f"🚘 Кузов: {_nice(v['body'])}")
+    if v.get("fuel"):
+        specs.append(f"⛽ Паливо: {_nice(v['fuel'])}")
+    if v.get("capacity"):
+        specs.append(f"🔧 Обʼєм: {v['capacity']} см³")
+    if v.get("color"):
+        specs.append(f"🎨 Колір: {_nice(v['color'])}")
+    if specs:
+        lines.append("━━━━━━━━━━━━")
+        lines += specs
     lines.append("━━━━━━━━━━━━")
-    lines.append(f"{semoji} У реєстрі МВС: <b>{slabel}</b>")
+    lines.append(f"{semoji} Реєстрація: <b>{slabel}</b>")
+    # Розшук — явно (і коли є, і коли нема)
+    lines.append("🚨 Розшук: <b>В РОЗШУКУ</b> ⚠️" if wanted else "🛡 Розшук: <b>не в розшуку</b> ✅")
     lines.append(_booking_line(d))
     mk = d.get("market")
     if mk and (mk.get("median") or mk.get("mean")):
         lines.append(f"💵 Ринок (AutoRia): <b>~${(mk.get('median') or mk.get('mean')):,}</b>".replace(",", " "))
-    lines.append("\nОбери, що показати 👇")
+    lines.append("\nДеталі — кнопки нижче 👇")
     return "\n".join(lines)
 
 
