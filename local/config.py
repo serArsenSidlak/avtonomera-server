@@ -53,15 +53,15 @@ API_RATE_PER_MIN: int = int(os.environ.get("LOCAL_API_RATE_PER_MIN", "120"))
 # (bumps the chat back up Telegram's list). Hours; 0 disables. Default daily.
 REFRESH_HOURS: int = int(os.environ.get("LOCAL_REFRESH_HOURS", "24"))
 
-# Hourly main-menu broadcast: at the top of every hour from MENU_HOURS_START..MENU_HOURS_END
-# (Kyiv time, inclusive) the bot sends a FRESH main menu to every user and wipes the old
-# conversation below it — so the bot stays near the top of Telegram's chat list and the screen
-# stays clean. Set MENU_BROADCAST=0 to disable. Supersedes REFRESH_HOURS when enabled.
+# Daily main-menu broadcast: ONCE per day at a random minute inside
+# [MENU_HOUR:MENU_MIN_START .. MENU_HOUR:MENU_MIN_END] (Kyiv time) the bot sends a FRESH main
+# menu to every user and wipes the old conversation below it — so the bot stays near the top of
+# Telegram's chat list and the screen stays clean. Set MENU_BROADCAST=0 to disable.
+# Default: once a day, random moment between 18:30 and 18:50 (owner request).
 MENU_BROADCAST: bool = os.environ.get("LOCAL_MENU_BROADCAST", "1") == "1"
-MENU_HOURS_START: int = int(os.environ.get("LOCAL_MENU_HOURS_START", "7"))
-MENU_HOURS_END: int = int(os.environ.get("LOCAL_MENU_HOURS_END", "21"))
-# Send every N hours within the window (counted from MENU_HOURS_START). Default 4 → 07/11/15/19.
-MENU_INTERVAL_HOURS: int = int(os.environ.get("LOCAL_MENU_INTERVAL_HOURS", "4"))
+MENU_HOUR: int = int(os.environ.get("LOCAL_MENU_HOUR", "18"))
+MENU_MIN_START: int = int(os.environ.get("LOCAL_MENU_MIN_START", "30"))
+MENU_MIN_END: int = int(os.environ.get("LOCAL_MENU_MIN_END", "50"))
 
 # Viber bot (optional second channel). Token from partners.viber.com. Webhook on the server.
 VIBER_TOKEN: str = os.environ.get("LOCAL_VIBER_TOKEN", "")

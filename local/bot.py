@@ -441,25 +441,29 @@ async def push_menu_wipe_all(bot: Bot, banner: str = "") -> int:
 
 
 async def _hourly_menu_loop(bot: Bot) -> None:
-    """Every MENU_INTERVAL_HOURS within MENU_HOURS_START..MENU_HOURS_END (Kyiv), broadcast a fresh
-    main menu and wipe the old conversation. Polls each minute, fires once per eligible hour.
+    """Once per day at a random minute inside MENU_HOUR:[MIN_START..MIN_END] (Kyiv), broadcast a
+    fresh main menu and wipe the old conversation. Polls each minute; the random target is chosen
+    once per day, so the send time varies but happens exactly once.
     """
     from zoneinfo import ZoneInfo
     import datetime as dt
+    import random
     kyiv = ZoneInfo("Europe/Kyiv")
-    last_slot = None  # (date, hour) already handled — avoids re-firing within the same hour
+    fired_date = None      # date we already broadcast — one send per calendar day
+    target = None          # (date, minute) chosen randomly for the current day
     while True:
         try:
             now = dt.datetime.now(kyiv)
-            in_window = config.MENU_HOURS_START <= now.hour <= config.MENU_HOURS_END
-            step = max(1, config.MENU_INTERVAL_HOURS)
-            on_interval = (now.hour - config.MENU_HOURS_START) % step == 0
-            if in_window and on_interval and now.minute < 5:
-                slot = (now.date(), now.hour)
-                if slot != last_slot:
-                    last_slot = slot
-                    n = await push_menu_wipe_all(bot)
-                    print(f"[menu] {now:%Y-%m-%d %H:%M} menu → {n} chats")
+            # (Re)pick today's random target minute when the day rolls over.
+            if target is None or target[0] != now.date():
+                lo, hi = config.MENU_MIN_START, max(config.MENU_MIN_START, config.MENU_MIN_END)
+                target = (now.date(), random.randint(lo, hi))
+            _, tmin = target
+            due = now.hour == config.MENU_HOUR and now.minute >= tmin
+            if due and fired_date != now.date():
+                fired_date = now.date()
+                n = await push_menu_wipe_all(bot)
+                print(f"[menu] {now:%Y-%m-%d %H:%M} daily menu (target :{tmin:02d}) → {n} chats")
         except Exception as exc:  # noqa: BLE001
             print(f"[menu] loop: {exc!r}")
         await asyncio.sleep(60)
@@ -3986,7 +3990,7 @@ async def main() -> None:
     except Exception:
         pass
     if config.MENU_BROADCAST:
-        asyncio.create_task(_hourly_menu_loop(bot))  # hourly 07–21 menu + wipe (owner request)
+        asyncio.create_task(_hourly_menu_loop(bot))  # once/day 18:30–18:50 random menu + wipe (owner request)
     elif config.REFRESH_HOURS > 0:
         asyncio.create_task(_periodic_refresh(bot))
     asyncio.create_task(_auto_commit_loop(bot))
