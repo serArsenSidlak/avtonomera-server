@@ -52,7 +52,7 @@ async def guard(request: Request, call_next):
     if config.API_KEY and path not in _OPEN_PATHS and not path.startswith("/viber") \
             and not path.startswith("/r/") \
             and path not in ("/ingest", "/parse-job", "/stage", "/collect", "/collect-html",
-                             "/collector", "/autocheck/register", "/autocheck/load-test",
+                             "/collector", "/proxycheck", "/autocheck/register", "/autocheck/load-test",
                              "/autocheck/load-status", "/autocheck/load-wanted",
                              "/autocheck/wanted-status", "/autocheck/poll", "/autocheck/result",
                              "/autocheck/agent-status", "/autocheck/ria-status"):
@@ -1218,6 +1218,83 @@ def _html_attr(s: str) -> str:
 
 def _html_text(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+# ── Проксі-чекер НА СЕРВЕРІ (тимчасово, поряд із ботом) ──
+# Веб-форма: вставив список проксі → сервер прогнав через winagent/proxycheck.py (один HTTPS-запит
+# до порталу через кожен) → показав, хто 403 «на вході», хто пройшов (кандидат), хто мертвий.
+# Захист — той самий app-key через ?k= (як /collector). Відкрити:
+#   https://34.123.136.171.nip.io/proxycheck?k=<LOCAL_API_KEY>
+_PROXYCHECK_PAGE = """<!doctype html><html lang="uk"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Проксі-чекер</title>
+<style>body{background:#0b0e14;color:#f1f4f9;font-family:-apple-system,system-ui,Roboto,Arial,sans-serif;max-width:860px;margin:0 auto;padding:24px}
+h1{font-size:20px}textarea{width:100%;height:200px;background:#161b24;color:#f1f4f9;border:1px solid #222a36;border-radius:10px;padding:12px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+button{background:#3b82f6;color:#fff;border:0;border-radius:10px;padding:12px 20px;font-size:15px;cursor:pointer;margin-top:10px}
+label{display:inline-flex;align-items:center;gap:6px;margin:8px 12px 8px 0;color:#8b95a7}
+pre{background:#0f141c;border:1px solid #222a36;border-radius:10px;padding:14px;white-space:pre-wrap;word-break:break-all;font-size:13px;line-height:1.5}
+input[type=number]{width:70px;background:#161b24;color:#f1f4f9;border:1px solid #222a36;border-radius:8px;padding:6px}
+code{color:#9db2d6}</style></head><body>
+<h1>🔎 Проксі-чекер (Akamai «на вході»)</h1>
+<p style="color:#8b95a7">Встав проксі, по одному на рядок. Формати: <code>ip:port</code>, <code>ip:port:логін:пароль</code>, <code>socks5://…</code>. MTProto пропускаються.</p>
+<form method="post" action="/proxycheck?k=@K@">
+<textarea name="proxies" placeholder="1.2.3.4:8080&#10;socks5://user:pass@host:port">@PROX@</textarea><br>
+<label>Таймаут, сек <input type="number" name="timeout" value="@T@" min="4" max="30"></label>
+<label><input type="checkbox" name="geo" @GEO@> країна/IP кандидатів</label><br>
+<button type="submit">Перевірити</button>
+</form>
+@RESULT@
+</body></html>"""
+
+
+@app.get("/proxycheck", response_class=HTMLResponse)
+async def proxycheck_form(k: str = ""):
+    """Token-gated proxy-checker form (k = app key)."""
+    if not config.API_KEY or k != config.API_KEY:
+        raise HTTPException(403, "forbidden")
+    page = (_PROXYCHECK_PAGE.replace("@K@", _html_attr(k)).replace("@PROX@", "")
+            .replace("@T@", "12").replace("@GEO@", "").replace("@RESULT@", ""))
+    return HTMLResponse(page)
+
+
+@app.post("/proxycheck", response_class=HTMLResponse)
+async def proxycheck_run(request: Request, k: str = ""):
+    """Run winagent/proxycheck.py server-side over the pasted proxies and show the verdict."""
+    import asyncio
+    import html
+    import os
+
+    if not config.API_KEY or k != config.API_KEY:
+        raise HTTPException(403, "forbidden")
+    form = await request.form()
+    proxies = (form.get("proxies") or "").strip()
+    geo = "geo" in form
+    try:
+        t = max(4, min(30, int(form.get("timeout") or "12")))
+    except ValueError:
+        t = 12
+    lines = [ln for ln in proxies.splitlines() if ln.strip()][:500]  # cap
+    script = os.path.join(os.path.dirname(os.path.dirname(__file__)), "winagent", "proxycheck.py")
+    args = ["python3", script, "--timeout", str(t), "--workers", "60"] + (["--geo"] if geo else [])
+    out = ""
+    if not lines:
+        out = "Порожній список."
+    else:
+        budget = (len(lines) // 60 + 2) * t + 90  # overall wall-clock allowance
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT)
+            stdout, _ = await asyncio.wait_for(
+                proc.communicate(input="\n".join(lines).encode()), timeout=budget)
+            out = stdout.decode("utf-8", "replace")
+        except asyncio.TimeoutError:
+            out = "⏱ Не вклалось у час — спробуй менший список або менший таймаут."
+        except Exception as exc:  # noqa: BLE001
+            out = f"Помилка запуску чекера: {exc!r}"
+    result = f"<h2 style='font-size:16px;margin-top:22px'>Результат</h2><pre>{html.escape(out)}</pre>"
+    page = (_PROXYCHECK_PAGE.replace("@K@", _html_attr(k)).replace("@PROX@", _html_text(proxies))
+            .replace("@T@", str(t)).replace("@GEO@", "checked" if geo else "").replace("@RESULT@", result))
+    return HTMLResponse(page)
 
 
 # ── AutoCheck тестова база НА СЕРВЕРІ (2026, без тунелю) ──
