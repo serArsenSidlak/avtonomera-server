@@ -1295,8 +1295,17 @@ async def do_acheck(message: Message, state: FSMContext) -> None:
                    kb_back([("🚗 Перевірити", "acheck")]))
         return
     await show(message.bot, message.chat.id, "🔎 Шукаю в реєстрі МВС…", kb_back())
-    res = await _autocheck_query(q)
-    await _show_ac(message.bot, message.chat.id, q, res)
+    try:
+        res = await _autocheck_query(q)
+        await _show_ac(message.bot, message.chat.id, q, res)
+    except Exception as exc:  # noqa: BLE001 — тимчасова діагностика зависання «Шукаю»
+        import traceback
+        tb = traceback.format_exc()[-600:]
+        print(f"[acheck] FAIL for {q!r}: {exc!r}\n{tb}", flush=True)
+        _emsg = str(exc).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:300]
+        await show(message.bot, message.chat.id,
+                   f"⚠️ Помилка перевірки авто.\n<code>{_emsg}</code>",
+                   kb_back([("🚗 Ще раз", "acheck")]))
 
 
 # ── Підбір за комбінацією цифр: доступні / зайняті / вільні (обʼєднання баз) ──
