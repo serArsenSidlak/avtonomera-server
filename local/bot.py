@@ -917,8 +917,9 @@ def _ac_menu_kb(d: dict, query: str) -> InlineKeyboardMarkup:
     b.button(text="⚖️ Обтяження (Мінюст)", url="https://online.minjust.gov.ua/")
     ext += 1
     # Судові рішення (ЄДРСР): site-пошук по реєстру на номер/VIN — знаходить справи, де він згаданий.
+    # ВАЖЛИВО: лапки/пробіли треба закодувати повністю, інакше Telegram відхиляє кнопку (BUTTON_URL_INVALID).
     b.button(text="🏛 Суд (ЄДРСР)",
-             url=f'https://www.google.com/search?q=site:reyestr.court.gov.ua+"{quote(primary)}"')
+             url="https://www.google.com/search?q=" + quote(f'site:reyestr.court.gov.ua "{primary}"'))
     ext += 1
     groups += [2] * (ext // 2) + ([1] if ext % 2 else [])
     b.button(text="🚗 Перевірити ще", callback_data="acheck")
