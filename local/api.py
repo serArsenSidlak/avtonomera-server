@@ -1740,11 +1740,18 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
         if w:
             res["wanted"] = w
     # Долити орієнтовну ринкову ціну з AutoRia (по марці/моделі/року; VIN — для точного матчу).
+    # Обмежуємо часом: якщо AutoRia повільна — пропускаємо ціну, але картку авто віддаємо швидко
+    # (щоб бот НЕ «зависав» на «Шукаю»).
     if res.get("found"):
         v = res.get("vehicle") or {}
-        mk = await _autoria_price(v.get("brand"), v.get("model"), v.get("make_year"), v.get("vin"))
-        if mk:
-            res["market"] = mk
+        try:
+            mk = await asyncio.wait_for(
+                _autoria_price(v.get("brand"), v.get("model"), v.get("make_year"), v.get("vin")),
+                timeout=4)
+            if mk:
+                res["market"] = mk
+        except Exception:  # noqa: BLE001
+            pass
     return res
 
 
