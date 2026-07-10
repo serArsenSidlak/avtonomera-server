@@ -1693,12 +1693,27 @@ async def autocheck_register(request: Request) -> dict:
     return {"ok": True, "url": url}
 
 
+# Серверна база авто на InfoScan (21 млн, 24/7) — основне джерело AutoCheck (без ПК-агента).
+_AC_INFOSCAN = _os.environ.get("AC_INFOSCAN_URL", "https://infoscan.com.ua").rstrip("/")
+
+
+def _ac_infoscan_sync(plate, vin):
+    """Запит у серверну базу InfoScan (24/7). Повертає dict (found True/False) або None якщо недоступна."""
+    import json as _j
+    import urllib.parse as _up
+    url = f"{_AC_INFOSCAN}/auto/api/lookup?" + _up.urlencode({"plate": plate or "", "vin": vin or ""})
+    try:
+        req = _urlreq.Request(url, headers={"User-Agent": "avtonomera-bot/1.0"})
+        with _urlreq.urlopen(req, timeout=8) as r:
+            return _j.loads(r.read().decode("utf-8"))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 @app.get("/autocheck/lookup")
 async def autocheck_lookup(plate: str = "", vin: str = ""):
-    """Proxy a vehicle lookup to the registered PC-agent tunnel (so app/bot use a stable URL).
-
-    Behind the app API key (middleware). Returns {found, vehicle, history} or {found:false}.
-    """
+    """Vehicle lookup. Джерела за пріоритетом: InfoScan (24/7, повна база) → PC-агент → тестова база.
+    Ніколи не «зависає»: у InfoScan-запиті таймаут, тож бот завжди отримує відповідь."""
     import asyncio
     import time as _time
 
@@ -1706,14 +1721,19 @@ async def autocheck_lookup(plate: str = "", vin: str = ""):
         raise HTTPException(400, "plate or vin required")
 
     res = None
-    # 1) PC-агент (повна база) через опитування — якщо опитував нещодавно.
-    if _AC_AGENT["seen"] and (_time.time() - _AC_AGENT["seen"] < 35):
+    # 1) InfoScan — серверна база 24/7 (основне). Відповідь (found True/False) — авторитетна.
+    try:
+        res = await asyncio.wait_for(asyncio.to_thread(_ac_infoscan_sync, plate, vin), timeout=10)
+    except Exception:  # noqa: BLE001
+        res = None
+    # 2) Якщо InfoScan недоступний — запасний PC-агент (якщо онлайн).
+    if res is None and _AC_AGENT["seen"] and (_time.time() - _AC_AGENT["seen"] < 35):
         res = await _ac_query_agent(plate, vin)
-    # 2) Інакше — локальна тестова база на сервері.
+    # 3) Інакше — локальна тестова база.
     if res is None:
         res = await asyncio.to_thread(_ac_lookup_local, plate, vin)
     if res is None:
-        return {"found": False, "offline": True, "note": "AutoCheck-агент не підключений"}
+        return {"found": False, "offline": True, "note": "База авто тимчасово недоступна"}
     # Долити розшук, якщо результат від агента (він без позначки розшуку).
     if "wanted" not in res:
         w = await asyncio.to_thread(_ac_wanted, plate, vin)
