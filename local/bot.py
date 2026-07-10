@@ -3925,8 +3925,15 @@ async def fallback(message: Message) -> None:
     await _safe_delete(message.bot, message.chat.id, message.message_id)
     if plate:
         await show(message.bot, message.chat.id, "🔎 Перевіряю номер у реєстрі МВС…", kb_back())
-        res = await _autocheck_query(plate)
-        await _show_ac(message.bot, message.chat.id, plate, res)
+        try:
+            res = await _autocheck_query(plate)
+            await _show_ac(message.bot, message.chat.id, plate, res)
+        except Exception as exc:  # noqa: BLE001 — тимчасова діагностика зависання
+            import traceback
+            print(f"[fallback-acheck] FAIL {plate!r}: {exc!r}\n{traceback.format_exc()[-600:]}", flush=True)
+            _em = str(exc).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")[:300]
+            await show(message.bot, message.chat.id,
+                       f"⚠️ Помилка перевірки авто.\n<code>{_em}</code>", kb_back([("🚗 Ще раз", "acheck")]))
         return
     await render_main(message.bot, message.chat.id)
 
